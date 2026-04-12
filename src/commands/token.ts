@@ -491,6 +491,15 @@ export const token = Cli.create('token', {
         })
       }
 
+      // Step 0: Validate image exists BEFORE burning an auth nonce
+      const imgFs = await import('node:fs')
+      if (!imgFs.existsSync(c.options.image)) {
+        return c.error({
+          code: 'IMAGE_NOT_FOUND',
+          message: `Image file not found: ${c.options.image}`,
+        })
+      }
+
       // Step 1: Authenticate with Four.meme
       let auth
       try {
@@ -596,28 +605,18 @@ export const token = Cli.create('token', {
             timeout: 60_000,
           })
 
-          // Parse TokenCreate event to extract the new token address.
-          // The event is: TokenCreate(creator, token, requestId, name, symbol, totalSupply, launchTime, launchFee)
-          // token is the second parameter (index 1).
-          const createEventSig = '0x' // We match by topic — TokenCreate has no indexed params in V2
-          // Look for the log from TokenManager2 that has enough data
-          const tmLogs = receipt.logs.filter(
-            (l) => l.address.toLowerCase() === TOKEN_MANAGER_V2.toLowerCase(),
-          )
-          // The token address is encoded in the event data. For simplicity,
-          // try to decode the second 32-byte word as an address.
-          let newTokenAddress: Address | undefined
-          for (const log of tmLogs) {
-            if (log.data.length >= 130) {
-              // data layout: creator(32) + token(32) + ...
-              const tokenWord = '0x' + log.data.slice(66, 130)
-              const addr = '0x' + tokenWord.slice(26) // last 20 bytes
-              if (addr.length === 42) {
-                newTokenAddress = getAddress(addr) as Address
-                break
-              }
-            }
-          }
+          // Parse TokenCreate event using viem's type-safe ABI decoder.
+          // Much more robust than raw hex offset parsing.
+          const { parseEventLogs } = await import('viem')
+          const createLogs = parseEventLogs({
+            abi: tokenManager2Abi,
+            logs: receipt.logs,
+            eventName: 'TokenCreate',
+          })
+          const newTokenAddress: Address | undefined =
+            createLogs.length > 0
+              ? (createLogs[0]!.args as { token?: Address }).token
+              : undefined
 
           if (newTokenAddress) {
             // Dev buy: use buyTokenAMAP on the new token

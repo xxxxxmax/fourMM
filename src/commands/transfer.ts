@@ -50,28 +50,7 @@ import {
 // Helpers
 // ============================================================
 
-/**
- * Build a viem WalletClient for the given account + pre-loaded config.
- *
- * We take the config as a parameter (rather than calling `loadConfig()`
- * internally) to avoid re-reading ~/.almm/config.json on every call.
- * The signer identity changes per wallet so we rebuild the client each
- * time, but the RPC list is stable within a command invocation.
- */
-function walletClientFor(
-  account: ReturnType<typeof privateKeyToAccount>,
-  config: CliConfig,
-): WalletClient {
-  const chain = config.network === 'bsc-testnet' ? bscTestnet : bsc
-  const transports = [config.rpcUrl, ...config.fallbackRpcUrls]
-    .filter((url): url is string => Boolean(url))
-    .map((url) => http(url, { timeout: 15_000 }))
-  return createWalletClient({
-    account,
-    chain,
-    transport: fallback(transports, { rank: false }),
-  })
-}
+import { makeWalletClient } from '../lib/walletClient.js'
 
 /** Apply a safety buffer to a gas price so insufficient-funds checks don't strand mid-batch */
 function bufferedGasPrice(raw: bigint): bigint {
@@ -252,7 +231,7 @@ export const transfer = Cli.create('transfer', {
         }
         const account = privateKeyToAccount(privateKey)
         signerAddress = account.address
-        walletClient = walletClientFor(account, config)
+        walletClient = makeWalletClient(account, config)
       }
 
       // ---- Pre-flight checks: sender balance, estimated cost ----
@@ -541,11 +520,15 @@ export const transfer = Cli.create('transfer', {
 
         let sendBnb = 0
         let insufficient = false
+        // Minimum send threshold: skip if sendBnb would be less than gas cost
+        const minSendThreshold = feePerTxBnb * 2
         if (c.options.amount === 'all') {
           sendBnb = Math.max(0, balanceBnb - bufferBnb - feePerTxBnb)
+          if (sendBnb < minSendThreshold) sendBnb = 0 // dust: not worth the gas
         } else if (c.options.amount === 'reserve') {
           const reserve = c.options.value!
           sendBnb = Math.max(0, balanceBnb - reserve - feePerTxBnb)
+          if (sendBnb < minSendThreshold) sendBnb = 0
         } else {
           // fixed: need value + gas; mark row as insufficient if wallet
           // can't cover both, so dry-run shows the problem before broadcast.
@@ -646,7 +629,7 @@ export const transfer = Cli.create('transfer', {
         }
 
         const account = privateKeyToAccount(privateKey)
-        const walletClient = walletClientFor(account, config)
+        const walletClient = makeWalletClient(account, config)
 
         try {
           const hash = (await walletClient.sendTransaction({
@@ -824,7 +807,7 @@ export const transfer = Cli.create('transfer', {
         }
 
         const account = privateKeyToAccount(privateKey)
-        const wc = walletClientFor(account, config)
+        const wc = makeWalletClient(account, config)
         try {
           const hash = (await wc.sendTransaction({ account, chain: wc.chain!, to: row.toWallet.address, value: parseEther(row.sendBnb.toFixed(18)) })) as Hash
           trackInBackground(publicClient, hash, { ca: NATIVE_BNB, groupId: c.options.fromGroup, walletAddress: account.address, txType: 'transfer_out', knownAmountBnb: -row.sendBnb, counterparty: row.toWallet.address })

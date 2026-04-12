@@ -221,8 +221,9 @@ export async function getTokenPrice(
  * rest of the pipeline still returns a priceBnb but priceUsd will be 0).
  */
 export async function getBnbUsdPrice(
-  fetchImpl: typeof fetch | undefined = globalThis.fetch,
+  fetchImpl?: typeof fetch | undefined,
 ): Promise<number> {
+  const fetchFn = fetchImpl ?? globalThis.fetch
   const ds = getDataStore()
   const cached = ds.getBnbPrice()
   const now = Date.now()
@@ -231,7 +232,7 @@ export async function getBnbUsdPrice(
   }
 
   try {
-    const res = await fetchImpl(
+    const res = await fetchFn(
       'https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd',
     )
     if (!res.ok) {
@@ -267,12 +268,13 @@ type GeckoResponse = {
 
 async function fetchGeckoTerminalPrice(
   ca: Address,
-  fetchImpl: typeof fetch | undefined = globalThis.fetch,
+  fetchImpl?: typeof fetch | undefined,
 ): Promise<{ priceUsd: number } | null> {
+  const fetchFn = fetchImpl ?? globalThis.fetch
   const config = loadConfig()
   const url = `${config.geckoTerminalUrl}/networks/bsc/tokens/${ca}`
   try {
-    const res = await fetchImpl(url, {
+    const res = await fetchFn(url, {
       headers: { accept: 'application/json' },
     })
     if (!res.ok) return null

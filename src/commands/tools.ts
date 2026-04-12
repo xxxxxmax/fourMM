@@ -73,6 +73,7 @@ export const tools = Cli.create('tools', {
           walletCount: z.number(),
           success: z.number(),
           failed: z.number(),
+          errors: z.array(z.string()),
         }),
       ),
     }),
@@ -364,6 +365,19 @@ export const tools = Cli.create('tools', {
       try { await assertSupportedToken(ca) } catch (err: any) { return c.error({ code: err.code ?? 'UNSUPPORTED', message: err.message }) }
       const client = getPublicClient()
       const config = loadConfig()
+
+      // Pancake guard: robot-price only works on bonding-curve tokens
+      let routing
+      try { routing = await resolveTradingPath(client, ca) } catch (err: any) {
+        return c.error({ code: 'ROUTING_FAILED', message: err.message })
+      }
+      if (routing.tradingPath.path === 'pancake') {
+        return c.error({
+          code: 'PANCAKE_NOT_YET',
+          message: 'robot-price does not support graduated (PancakeSwap) tokens yet. Only bonding-curve tokens are supported.',
+        })
+      }
+
       let totalSpent = 0
       const results: Array<{ round: number; price: number; status: string; error?: string }> = []
       for (let round = 1; round <= c.options.maxRounds; round++) {
@@ -377,7 +391,6 @@ export const tools = Cli.create('tools', {
         const w = group.wallets[walletIdx]!
         try {
           const pk = decryptPrivateKey(w, password); const account = privateKeyToAccount(pk); const wc = makeWalletClient(account, config)
-          let routing; try { routing = await resolveTradingPath(client, ca) } catch (err: any) { results.push({ round, price: currentPrice, status: 'routing-failed', error: err.message }); break }
           if (c.options.direction === 'up') {
             const bnbWei = parseEther(c.options.amount.toString())
             const tryR = await client.readContract({ address: TOKEN_MANAGER_HELPER3, abi: tokenManagerHelper3Abi, functionName: 'tryBuy', args: [ca, 0n, bnbWei] })
@@ -385,10 +398,16 @@ export const tools = Cli.create('tools', {
             await wc.writeContract({ address: routing.tradingPath.router, abi: tokenManager2Abi, functionName: 'buyTokenAMAP', args: [ca, bnbWei, minAmount], value: bnbWei, chain: wc.chain!, account })
             totalSpent += c.options.amount
           } else {
+            // Sell direction: compute token amount from BNB value using current price.
+            // amount = BNB to sell in value terms; convert to tokens via price.
             const balance = await client.readContract({ address: ca, abi: erc20Abi, functionName: 'balanceOf', args: [w.address] })
             if (balance === 0n) { results.push({ round, price: currentPrice, status: 'no-balance' }); continue }
-            const sellFrac = Math.min(c.options.amount, 1)
-            const sellAmount = (balance * BigInt(Math.round(sellFrac * 10000))) / 10_000n
+            // Convert BNB amount to approximate token amount: tokens = bnb / priceBnb
+            // Use at most the full balance
+            const tokensToSell = currentPrice > 0
+              ? BigInt(Math.min(Math.floor(c.options.amount / currentPrice), Number(balance)))
+              : balance / 10n // fallback: sell 10% if price unknown
+            const sellAmount = tokensToSell > balance ? balance : tokensToSell
             if (sellAmount === 0n) { results.push({ round, price: currentPrice, status: 'sell-amount-zero' }); continue }
             const approveHash = await wc.writeContract({ address: ca, abi: erc20Abi, functionName: 'approve', args: [routing.tradingPath.router, sellAmount], chain: wc.chain!, account })
             await client.waitForTransactionReceipt({ hash: approveHash as `0x${string}`, timeout: 30_000 })
