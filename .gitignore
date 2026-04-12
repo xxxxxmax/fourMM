@@ -1,0 +1,26 @@
+node_modules
+dist
+*.log
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode
+.idea
+*.swp
+*.swo
+
+# Foundry
+contracts/out
+contracts/cache
+contracts/broadcast
+
+# Local state
+.almm-test/
