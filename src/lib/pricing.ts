@@ -19,10 +19,24 @@
  */
 
 import type { Address, PublicClient } from 'viem'
-import { TOKEN_MANAGER_HELPER3 } from './const.js'
+import { TOKEN_MANAGER_HELPER3, PANCAKE_V2_FACTORY, WBNB } from './const.js'
 import { tokenManagerHelper3Abi } from '../contracts/tokenManagerHelper3.js'
 import { getDataStore } from '../datastore/index.js'
 import { loadConfig } from './config.js'
+
+// PancakeFactory getPair — to resolve LP pair address for graduated tokens
+const pancakeFactoryAbi = [
+  {
+    type: 'function',
+    name: 'getPair',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'tokenA', type: 'address' },
+      { name: 'tokenB', type: 'address' },
+    ],
+    outputs: [{ name: 'pair', type: 'address' }],
+  },
+] as const
 
 // ============================================================
 // Types
@@ -138,7 +152,7 @@ export async function getTokenPrice(
   // ---- Branch 1: bonding curve ----
   if (!liquidityAdded) {
     const priceBnb = Number(lastPrice) / 10 ** BNB_DECIMALS
-    const bnbUsd = await getBnbUsdPrice(options.fetchImpl).catch(() => 0)
+    const bnbUsd = await getBnbUsdPrice(client).catch(() => 0)
     const priceUsd = priceBnb * bnbUsd
 
     ds.savePoolInfo({
@@ -183,14 +197,30 @@ export async function getTokenPrice(
     )
   }
 
-  const bnbUsd = await getBnbUsdPrice(options.fetchImpl).catch(() => 0)
+  const bnbUsd = await getBnbUsdPrice(client).catch(() => 0)
   const priceUsd = gecko.priceUsd
   // Convert USD → BNB when we know the BNB price
   const priceBnb = bnbUsd > 0 ? priceUsd / bnbUsd : 0
 
+  // Resolve PancakeSwap LP pair address so `query kline` can auto-resolve it
+  let pairAddress: Address | '' = ''
+  try {
+    const pair = await client.readContract({
+      address: PANCAKE_V2_FACTORY,
+      abi: pancakeFactoryAbi,
+      functionName: 'getPair',
+      args: [ca, WBNB],
+    })
+    if (pair && pair !== '0x0000000000000000000000000000000000000000') {
+      pairAddress = pair
+    }
+  } catch {
+    // Factory query failed — pairAddress stays empty, kline needs --pool
+  }
+
   ds.savePoolInfo({
     ca,
-    pairAddress: '',
+    pairAddress,
     path: 'pancake',
     priceBnb,
     priceUsd,
@@ -220,10 +250,43 @@ export async function getTokenPrice(
  * or is rate-limited, we return the cached value if present, else 0 (so the
  * rest of the pipeline still returns a priceBnb but priceUsd will be 0).
  */
+// PancakeSwap WBNB/USDT pair — used for on-chain BNB/USD pricing
+// This avoids depending on external APIs (CoinGecko/GeckoTerminal) that
+// may be unreachable from certain environments (e.g. WSL2 TLS issues).
+const PANCAKE_WBNB_USDT_PAIR: Address = '0x16b9a82891338f9ba80e2d6970fdda79d1eb0dae'
+
+const pairReservesAbi = [
+  {
+    type: 'function',
+    name: 'getReserves',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [
+      { name: 'reserve0', type: 'uint112' },
+      { name: 'reserve1', type: 'uint112' },
+      { name: 'blockTimestampLast', type: 'uint32' },
+    ],
+  },
+  {
+    type: 'function',
+    name: 'token0',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+] as const
+
+/**
+ * Get BNB → USD price with 60s cache.
+ *
+ * Primary source: on-chain PancakeSwap WBNB/USDT pair reserves (no external
+ * API dependency — uses the same viem client that's already working for RPC).
+ *
+ * Fallback: CoinGecko simple/price endpoint (may fail in restricted networks).
+ */
 export async function getBnbUsdPrice(
-  fetchImpl?: typeof fetch | undefined,
+  clientOrFetch?: PublicClient | typeof fetch | undefined,
 ): Promise<number> {
-  const fetchFn = fetchImpl ?? globalThis.fetch
   const ds = getDataStore()
   const cached = ds.getBnbPrice()
   const now = Date.now()
@@ -231,23 +294,56 @@ export async function getBnbUsdPrice(
     return cached.priceUsd
   }
 
+  // Try on-chain first: read PancakeSwap WBNB/USDT reserves
+  if (clientOrFetch && typeof clientOrFetch === 'object' && 'readContract' in clientOrFetch) {
+    const client = clientOrFetch as PublicClient
+    try {
+      const token0 = await client.readContract({
+        address: PANCAKE_WBNB_USDT_PAIR,
+        abi: pairReservesAbi,
+        functionName: 'token0',
+      })
+      const [reserve0, reserve1] = await client.readContract({
+        address: PANCAKE_WBNB_USDT_PAIR,
+        abi: pairReservesAbi,
+        functionName: 'getReserves',
+      })
+      // Determine which reserve is WBNB and which is USDT
+      const wbnbLower = WBNB.toLowerCase()
+      const isToken0Wbnb = (token0 as string).toLowerCase() === wbnbLower
+      const wbnbReserve = isToken0Wbnb ? reserve0 : reserve1
+      const usdtReserve = isToken0Wbnb ? reserve1 : reserve0
+      // WBNB = 18 decimals, USDT = 18 decimals on BSC
+      if (wbnbReserve > 0n) {
+        const price = Number(usdtReserve) / Number(wbnbReserve)
+        if (price > 0) {
+          ds.saveBnbPrice(price)
+          return price
+        }
+      }
+    } catch {
+      // On-chain query failed — try API fallback
+    }
+  }
+
+  // Fallback: CoinGecko API
   try {
+    const fetchFn = (typeof clientOrFetch === 'function' ? clientOrFetch : globalThis.fetch) as typeof fetch
     const res = await fetchFn(
       'https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd',
     )
-    if (!res.ok) {
-      return cached?.priceUsd ?? 0
-    }
+    if (!res.ok) return cached?.priceUsd ?? 0
     const json = (await res.json()) as { binancecoin?: { usd?: number } }
     const price = json.binancecoin?.usd
     if (typeof price === 'number' && price > 0) {
       ds.saveBnbPrice(price)
       return price
     }
-    return cached?.priceUsd ?? 0
   } catch {
-    return cached?.priceUsd ?? 0
+    // API also failed
   }
+
+  return cached?.priceUsd ?? 0
 }
 
 // ============================================================

@@ -1,26 +1,37 @@
 /**
  * Slippage calculation helpers for Router calls.
  *
- * The Router's volume() / turnover() / volumePancake() functions accept
- * minTokenOut and minBnbBack as slippage guards. These helpers compute
- * meaningful minimums using Helper3.tryBuy estimates.
+ * Two paths:
+ *   - Bonding curve: uses Helper3.tryBuy to estimate output
+ *   - PancakeSwap (graduated): uses PancakeRouter.getAmountsOut
  *
- * Without these, passing 0n makes every tx fully sandwichable.
+ * Without proper minimums, passing 0n makes every tx fully sandwichable.
  */
 
 import type { Address, PublicClient } from 'viem'
-import { TOKEN_MANAGER_HELPER3 } from './const.js'
+import { TOKEN_MANAGER_HELPER3, PANCAKE_V2_ROUTER, WBNB } from './const.js'
 import { tokenManagerHelper3Abi } from '../contracts/tokenManagerHelper3.js'
 
+// PancakeSwap getAmountsOut ABI (just what we need)
+const pancakeGetAmountsOutAbi = [
+  {
+    type: 'function',
+    name: 'getAmountsOut',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'amountIn', type: 'uint256' },
+      { name: 'path', type: 'address[]' },
+    ],
+    outputs: [{ name: 'amounts', type: 'uint256[]' }],
+  },
+] as const
+
 /**
- * Compute minTokenOut for a buy of `bnbWei` with `slippageBps` tolerance.
+ * Compute slippage-protected minimums for volume (buy+sell round-trip).
  *
- * Uses Helper3.tryBuy to estimate how many tokens we'd get, then applies
- * the slippage discount: minTokenOut = estimated * (10000 - slippageBps) / 10000
- *
- * For the sell leg (minBnbBack), we use a simple heuristic:
- *   minBnbBack = bnbWei * (10000 - slippageBps - feeBps) / 10000
- * where feeBps accounts for the bonding curve's ~1% round-trip fee × 2.
+ * Tries bonding-curve estimation first (tryBuy). If that fails (token has
+ * graduated), falls back to PancakeSwap getAmountsOut. If both fail,
+ * returns 0n (no protection — last resort).
  */
 export async function computeVolumeSlippage(
   client: PublicClient,
@@ -30,8 +41,10 @@ export async function computeVolumeSlippage(
 ): Promise<{ minTokenOut: bigint; minBnbBack: bigint }> {
   const slipBig = BigInt(slippageBps)
 
-  // Estimate buy output
+  // --- Try bonding curve first ---
   let minTokenOut = 0n
+  let usedPancake = false
+
   try {
     const result = await client.readContract({
       address: TOKEN_MANAGER_HELPER3,
@@ -42,15 +55,28 @@ export async function computeVolumeSlippage(
     const estimatedTokens = result[2]
     minTokenOut = (estimatedTokens * (10_000n - slipBig)) / 10_000n
   } catch {
-    // If tryBuy fails, fall back to 0 (no protection). Better than crashing.
-    minTokenOut = 0n
+    // tryBuy failed — token is likely graduated. Try PancakeSwap.
+    try {
+      const amounts = await client.readContract({
+        address: PANCAKE_V2_ROUTER,
+        abi: pancakeGetAmountsOutAbi,
+        functionName: 'getAmountsOut',
+        args: [bnbWei, [WBNB, token]],
+      })
+      if (amounts.length >= 2) {
+        const estimatedTokens = amounts[1]!
+        minTokenOut = (estimatedTokens * (10_000n - slipBig)) / 10_000n
+        usedPancake = true
+      }
+    } catch {
+      // Both paths failed — 0n fallback (no protection, but won't crash)
+      minTokenOut = 0n
+    }
   }
 
-  // For round-trip (volume), the sell returns less than we paid due to:
-  //   - bonding curve spread
-  //   - 1% trading fee on buy + 1% on sell ≈ 200 bps total
-  // We apply slippage on top of the estimated fee to compute minBnbBack.
-  const estimatedFeeBps = 250n // ~2.5% for round-trip (generous)
+  // For the sell leg: estimate how much BNB we'd get back after a round-trip.
+  // Bonding curve: ~2.5% round-trip fee. PancakeSwap: ~0.5% LP fee × 2 = 1%.
+  const estimatedFeeBps = usedPancake ? 150n : 250n
   const totalDiscountBps = slipBig + estimatedFeeBps
   const effectiveBps = totalDiscountBps > 10_000n ? 10_000n : totalDiscountBps
   const minBnbBack = (bnbWei * (10_000n - effectiveBps)) / 10_000n
@@ -60,6 +86,7 @@ export async function computeVolumeSlippage(
 
 /**
  * Compute minTokenOut for a turnover (buy-only, no sell leg).
+ * Same dual-path logic as computeVolumeSlippage but only the buy side.
  */
 export async function computeTurnoverSlippage(
   client: PublicClient,
@@ -69,6 +96,7 @@ export async function computeTurnoverSlippage(
 ): Promise<{ minTokenOut: bigint }> {
   const slipBig = BigInt(slippageBps)
 
+  // Try bonding curve
   try {
     const result = await client.readContract({
       address: TOKEN_MANAGER_HELPER3,
@@ -76,9 +104,22 @@ export async function computeTurnoverSlippage(
       functionName: 'tryBuy',
       args: [token, 0n, bnbWei],
     })
-    const estimatedTokens = result[2]
-    return { minTokenOut: (estimatedTokens * (10_000n - slipBig)) / 10_000n }
+    return { minTokenOut: (result[2] * (10_000n - slipBig)) / 10_000n }
   } catch {
+    // Fallback: PancakeSwap
+    try {
+      const amounts = await client.readContract({
+        address: PANCAKE_V2_ROUTER,
+        abi: pancakeGetAmountsOutAbi,
+        functionName: 'getAmountsOut',
+        args: [bnbWei, [WBNB, token]],
+      })
+      if (amounts.length >= 2) {
+        return { minTokenOut: (amounts[1]! * (10_000n - slipBig)) / 10_000n }
+      }
+    } catch {
+      // both failed
+    }
     return { minTokenOut: 0n }
   }
 }

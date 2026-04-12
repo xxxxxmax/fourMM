@@ -627,7 +627,7 @@ export const wallet = Cli.create('wallet', {
       file: z.string().describe('Output CSV path'),
       password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
     }),
-    output: z.object({ groupId: z.number(), count: z.number(), file: z.string(), message: z.string() }),
+    output: z.object({ groupId: z.number(), count: z.number(), file: z.string(), decryptFailures: z.number(), message: z.string() }),
     run(c) {
       const password = resolveAlmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
@@ -636,16 +636,39 @@ export const wallet = Cli.create('wallet', {
       if (!group) return c.error({ code: 'GROUP_NOT_FOUND', message: `Group ${c.options.group} does not exist` })
 
       const rows = ['address,privateKey,note']
+      let decryptFailures = 0
       for (const w of group.wallets) {
         let pk: string
-        try { pk = decryptPrivateKey(w, password) } catch { pk = '<decrypt-failed>' }
+        try {
+          pk = decryptPrivateKey(w, password)
+        } catch {
+          pk = '<decrypt-failed>'
+          decryptFailures++
+        }
         rows.push(`${w.address},${pk},${w.note.replace(/,/g, ';')}`)
+      }
+
+      if (decryptFailures > 0 && decryptFailures === group.wallets.length) {
+        return c.error({
+          code: 'ALL_DECRYPT_FAILED',
+          message: `All ${group.wallets.length} wallets failed to decrypt. Wrong password?`,
+        })
       }
 
       fs.writeFileSync(c.options.file, rows.join('\n') + '\n', { encoding: 'utf-8', mode: 0o600 })
 
+      const warnings = decryptFailures > 0
+        ? `WARNING: ${decryptFailures}/${group.wallets.length} wallets failed to decrypt — their private keys are written as '<decrypt-failed>' in the CSV.`
+        : undefined
+
       return c.ok(
-        { groupId: c.options.group, count: group.wallets.length, file: c.options.file, message: `Exported ${group.wallets.length} wallets to ${c.options.file}` },
+        {
+          groupId: c.options.group,
+          count: group.wallets.length,
+          file: c.options.file,
+          decryptFailures,
+          message: warnings ?? `Exported ${group.wallets.length} wallets to ${c.options.file}`,
+        },
         { cta: { commands: [{ command: 'wallet group-info', options: { id: c.options.group }, description: 'View group' }] } },
       )
     },
@@ -669,7 +692,12 @@ export const wallet = Cli.create('wallet', {
       if (!store) return c.error({ code: 'NO_STORE', message: 'No wallet store found.' })
 
       const groupCount = Object.keys(store.groups).length
-      const json = JSON.stringify(store, null, 2)
+
+      // Strip passwordCheck from the export to prevent brute-force attacks.
+      // The passwordCheck is a known-plaintext AES marker that, combined with
+      // encrypted private keys, is a self-contained brute-force target.
+      const exportData = { ...store, passwordCheck: undefined }
+      const json = JSON.stringify(exportData, null, 2)
 
       if (c.options.encrypt) {
         const encrypted = encrypt(json, password)
