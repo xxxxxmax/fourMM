@@ -686,11 +686,29 @@ export const trade = Cli.create('trade', {
             txType: 'sell',
           })
 
+          // Post-sell verification: wait for receipt then check if balance actually changed.
+          // Four.meme may have a buy-then-sell cooldown where sellToken "succeeds" (status=1,
+          // events emitted) but the actual state isn't modified. Warn the user if detected.
+          let sellVerified = 'broadcast'
+          try {
+            await client.waitForTransactionReceipt({ hash: hash as Hash, timeout: 30_000 })
+            const postBalance = await client.readContract({
+              address: ca, abi: erc20Abi, functionName: 'balanceOf', args: [w.address],
+            })
+            if (postBalance === balance) {
+              sellVerified = 'WARNING: tx succeeded but token balance unchanged — possible protocol cooldown after buy. Try again in a few blocks.'
+            } else {
+              sellVerified = 'confirmed'
+            }
+          } catch {
+            sellVerified = 'broadcast (verification timeout)'
+          }
+
           results.push({
             wallet: w.address,
             tokenBalance: formatUnits(balance, 18),
             sellAmount: formatUnits(sellAmount, 18),
-            status: 'broadcast',
+            status: sellVerified,
             txHash: hash,
           })
         } catch (err) {
