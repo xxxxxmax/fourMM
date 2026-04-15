@@ -1,7 +1,7 @@
 /**
  * BEP-20 / ERC-20 ABI binding.
  *
- * Includes the functions ALMM actually calls: balanceOf, approve, decimals,
+ * Includes the functions fourMM actually calls: balanceOf, approve, decimals,
  * symbol, name, totalSupply. transfer/transferFrom are omitted (the Router
  * and TokenManager handle token movement internally).
  */

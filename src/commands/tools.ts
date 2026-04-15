@@ -1,5 +1,5 @@
 /**
- * `almm tools` command group — market-making bots.
+ * `fourmm tools` command group — market-making bots.
  *
  * - volume:   multi-wallet, multi-round Router.volume() loop
  * - turnover: two-group wallet pairing via Router.turnover()
@@ -12,6 +12,7 @@ import {
   getAddress,
   isAddress,
   parseEther,
+  parseUnits,
   type Address,
   type Hash,
 } from 'viem'
@@ -30,13 +31,14 @@ import {
   TokenNotFoundError,
   UnsupportedTokenError,
 } from '../lib/guards.js'
-import { resolveAlmmPassword } from '../lib/env.js'
+import { resolveFourmmPassword } from '../lib/env.js'
 import { resolveTradingPath } from '../lib/routing.js'
 import { trackInBackground } from '../lib/tracker.js'
 import { getPublicClient } from '../lib/viem.js'
 import { decryptPrivateKey, getGroup } from '../wallets/groups/store.js'
 
 import { makeWalletClient } from '../lib/walletClient.js'
+import { signRawTx, sendBundle } from '../lib/bundle.js'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -46,7 +48,7 @@ export const tools = Cli.create('tools', {
   description: 'Market-making bots (volume, turnover, robot-price)',
 })
   // ============================================================
-  // almm tools volume
+  // fourmm tools volume
   // ============================================================
   .command('volume', {
     description:
@@ -79,7 +81,7 @@ export const tools = Cli.create('tools', {
     }),
     async run(c) {
       const ca = getAddress(c.options.token) as Address
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'Password required' })
 
       const group = getGroup(password, c.options.group)
@@ -141,7 +143,7 @@ export const tools = Cli.create('tools', {
               ca,
               groupId: c.options.group,
               walletAddress: account.address,
-              txType: 'buy',
+              txType: 'volume',
             })
 
             success++
@@ -199,7 +201,7 @@ export const tools = Cli.create('tools', {
     },
   })
   // ============================================================
-  // almm tools turnover
+  // fourmm tools turnover
   // ============================================================
   .command('turnover', {
     description:
@@ -232,7 +234,7 @@ export const tools = Cli.create('tools', {
     }),
     async run(c) {
       const ca = getAddress(c.options.token) as Address
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'Password required' })
 
       const fromGroup = getGroup(password, c.options.fromGroup)
@@ -249,6 +251,19 @@ export const tools = Cli.create('tools', {
       }
 
       const client = getPublicClient()
+
+      // Turnover uses Router.turnover() which only works on bonding-curve tokens
+      let routing
+      try { routing = await resolveTradingPath(client, ca) } catch (err: any) {
+        return c.error({ code: 'ROUTING_FAILED', message: err.message })
+      }
+      if (routing.tradingPath.path === 'pancake') {
+        return c.error({
+          code: 'PANCAKE_NOT_YET',
+          message: 'Router.turnover() only supports bonding-curve tokens. Graduated tokens are not yet supported.',
+        })
+      }
+
       const routerAddr = requireRouter()
       const config = loadConfig()
       const bnbWei = parseEther(c.options.amount.toString())
@@ -333,7 +348,7 @@ export const tools = Cli.create('tools', {
     },
   })
   // ============================================================
-  // almm tools robot-price
+  // fourmm tools robot-price
   // ============================================================
   .command('robot-price', {
     description: 'Auto buy (up) or sell (down) until target price. Rotates wallets in group.',
@@ -358,7 +373,7 @@ export const tools = Cli.create('tools', {
     }),
     async run(c) {
       const ca = getAddress(c.options.token) as Address
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'Password required' })
       const group = getGroup(password, c.options.group)
       if (!group || group.wallets.length === 0) return c.error({ code: 'GROUP_NOT_FOUND', message: 'Group not found' })
@@ -379,42 +394,113 @@ export const tools = Cli.create('tools', {
       }
 
       let totalSpent = 0
+      let tokenDecimals: number | null = null
       const results: Array<{ round: number; price: number; status: string; error?: string }> = []
+
+      /** Wait until a wallet's on-chain nonce reaches the expected value */
+      async function waitForNonce(address: Address, expected: number, timeoutMs = 15_000): Promise<void> {
+        const start = Date.now()
+        while (Date.now() - start < timeoutMs) {
+          const current = await client.getTransactionCount({ address })
+          if (current >= expected) return
+          await sleep(1000)
+        }
+      }
       for (let round = 1; round <= c.options.maxRounds; round++) {
         let currentPrice: number
-        try { const p = await getTokenPrice(client, ca); currentPrice = p.priceBnb } catch { results.push({ round, price: 0, status: 'price-fetch-failed' }); break }
+        try { const p = await getTokenPrice(client, ca); currentPrice = p.priceBnb } catch (err: any) { results.push({ round, price: 0, status: 'price-fetch-failed', error: err?.message ?? 'RPC unreachable' }); break }
+        if (currentPrice <= 0) { results.push({ round, price: 0, status: 'price-fetch-failed', error: 'Token price is zero — cannot compute trade amounts' }); break }
         if (c.options.direction === 'up' && currentPrice >= c.options.targetPrice) { results.push({ round, price: currentPrice, status: 'target-reached' }); break }
         if (c.options.direction === 'down' && currentPrice <= c.options.targetPrice) { results.push({ round, price: currentPrice, status: 'target-reached' }); break }
         if (c.options.maxCost && totalSpent >= c.options.maxCost) { results.push({ round, price: currentPrice, status: 'max-cost-reached' }); break }
         if (c.options.dryRun) { results.push({ round, price: currentPrice, status: 'dry-run-would-trade' }); if (round < c.options.maxRounds) await sleep(Math.min(c.options.interval, 1000)); continue }
-        const walletIdx = (round - 1) % group.wallets.length
-        const w = group.wallets[walletIdx]!
+
+        // ---- Bundle: sign all wallets' txs offline, submit as one atomic bundle ----
         try {
-          const pk = decryptPrivateKey(w, password); const account = privateKeyToAccount(pk); const wc = makeWalletClient(account, config)
-          if (c.options.direction === 'up') {
-            const bnbWei = parseEther(c.options.amount.toString())
-            const tryR = await client.readContract({ address: TOKEN_MANAGER_HELPER3, abi: tokenManagerHelper3Abi, functionName: 'tryBuy', args: [ca, 0n, bnbWei] })
-            const minAmount = (tryR[2] * (10_000n - BigInt(c.options.slippage))) / 10_000n
-            await wc.writeContract({ address: routing.tradingPath.router, abi: tokenManager2Abi, functionName: 'buyTokenAMAP', args: [ca, bnbWei, minAmount], value: bnbWei, chain: wc.chain!, account })
-            totalSpent += c.options.amount
-          } else {
-            // Sell direction: compute token amount from BNB value using current price.
-            // amount = BNB to sell in value terms; convert to tokens via price.
-            const balance = await client.readContract({ address: ca, abi: erc20Abi, functionName: 'balanceOf', args: [w.address] })
-            if (balance === 0n) { results.push({ round, price: currentPrice, status: 'no-balance' }); continue }
-            // Convert BNB amount to approximate token amount: tokens = bnb / priceBnb
-            // Use at most the full balance
-            const tokensToSell = currentPrice > 0
-              ? BigInt(Math.min(Math.floor(c.options.amount / currentPrice), Number(balance)))
-              : balance / 10n // fallback: sell 10% if price unknown
-            const sellAmount = tokensToSell > balance ? balance : tokensToSell
-            if (sellAmount === 0n) { results.push({ round, price: currentPrice, status: 'sell-amount-zero' }); continue }
-            const approveHash = await wc.writeContract({ address: ca, abi: erc20Abi, functionName: 'approve', args: [routing.tradingPath.router, sellAmount], chain: wc.chain!, account })
-            await client.waitForTransactionReceipt({ hash: approveHash as `0x${string}`, timeout: 30_000 })
-            await wc.writeContract({ address: routing.tradingPath.router, abi: tokenManager2Abi, functionName: 'sellToken', args: [ca, sellAmount], chain: wc.chain!, account })
+          const bnbWei = parseEther(c.options.amount.toString())
+          const gasPrice = await client.getGasPrice()
+          const currentBlock = await client.getBlockNumber()
+          const signedTxs: `0x${string}`[] = []
+          const bundleWallets: string[] = []
+          const { encodeFunctionData } = await import('viem')
+
+          // Resolve all wallet accounts + nonces from chain (always fresh)
+          const walletAccounts: { w: typeof group.wallets[number]; account: ReturnType<typeof privateKeyToAccount>; nonce: number }[] = []
+          for (const w of group.wallets) {
+            const pk = decryptPrivateKey(w, password)
+            const account = privateKeyToAccount(pk)
+            const nonce = await client.getTransactionCount({ address: account.address })
+            walletAccounts.push({ w, account, nonce })
           }
-          results.push({ round, price: currentPrice, status: 'executed' })
-        } catch (err: any) { results.push({ round, price: currentPrice, status: 'failed', error: err.message }) }
+
+          if (c.options.direction === 'up') {
+            for (const { w, account, nonce } of walletAccounts) {
+              const tryR = await client.readContract({ address: TOKEN_MANAGER_HELPER3, abi: tokenManagerHelper3Abi, functionName: 'tryBuy', args: [ca, 0n, bnbWei] })
+              const minAmount = (tryR[2] * (10_000n - BigInt(c.options.slippage))) / 10_000n
+              const data = encodeFunctionData({ abi: tokenManager2Abi, functionName: 'buyTokenAMAP', args: [ca, bnbWei, minAmount] })
+              const signed = await signRawTx(account, { to: routing.tradingPath.router, data, value: bnbWei, nonce, gasLimit: 300_000n, gasPrice })
+              signedTxs.push(signed)
+              bundleWallets.push(w.address)
+            }
+            totalSpent += c.options.amount * group.wallets.length
+          } else {
+            // Sell: Phase 1 — batch approve all wallets, wait for all confirms
+            // Phase 2 — sign all sell txs with correct post-approve nonces, bundle submit
+            if (tokenDecimals === null) {
+              const decimals = await client.readContract({ address: ca, abi: erc20Abi, functionName: 'decimals' })
+              tokenDecimals = Number(decimals)
+            }
+
+            type SellPrep = { wallet: typeof group.wallets[number]; account: ReturnType<typeof privateKeyToAccount>; sellAmount: bigint }
+            const preps: SellPrep[] = []
+
+            // Phase 1: compute sell amounts + send all approves
+            const approveHashes: `0x${string}`[] = []
+            for (const { w, account } of walletAccounts) {
+              const balance = await client.readContract({ address: ca, abi: erc20Abi, functionName: 'balanceOf', args: [w.address] })
+              if (balance === 0n) continue
+              const tokensToSell = parseUnits((c.options.amount / currentPrice).toFixed(Math.min(tokenDecimals!, 9)), tokenDecimals!)
+              const sellAmount = tokensToSell > balance ? balance : tokensToSell
+              if (sellAmount === 0n) continue
+              const wc = makeWalletClient(account, config)
+              const approveHash = await wc.writeContract({ address: ca, abi: erc20Abi, functionName: 'approve', args: [routing.tradingPath.router, sellAmount], chain: wc.chain!, account })
+              approveHashes.push(approveHash as `0x${string}`)
+              preps.push({ wallet: w, account, sellAmount })
+            }
+
+            if (preps.length === 0) { results.push({ round, price: currentPrice, status: 'no-balance' }); continue }
+
+            // Wait for ALL approves to confirm
+            for (const h of approveHashes) {
+              await client.waitForTransactionReceipt({ hash: h, timeout: 30_000 }).catch(() => {})
+            }
+
+            // Phase 2: read fresh nonces (post-approve confirmed) then sign sells
+            for (const prep of preps) {
+              const nonce = await client.getTransactionCount({ address: prep.account.address })
+              const data = encodeFunctionData({ abi: tokenManager2Abi, functionName: 'sellToken', args: [ca, prep.sellAmount] })
+              const signed = await signRawTx(prep.account, { to: routing.tradingPath.router, data, value: 0n, nonce, gasLimit: 300_000n, gasPrice })
+              signedTxs.push(signed)
+              bundleWallets.push(prep.wallet.address)
+            }
+          }
+
+          if (signedTxs.length === 0) { results.push({ round, price: currentPrice, status: 'no-txs' }); continue }
+
+          const bundleResult = await sendBundle(signedTxs, currentBlock + 2n)
+          if (bundleResult.success) {
+            for (const addr of bundleWallets) {
+              trackInBackground(client, '0x' as Hash, { ca, groupId: c.options.group, walletAddress: addr as Address, txType: c.options.direction === 'up' ? 'buy' : 'sell', ...(c.options.direction === 'up' ? { knownAmountBnb: -c.options.amount } : {}) })
+            }
+            results.push({ round, price: currentPrice, status: `bundle-submitted (${signedTxs.length} txs)` })
+            // Wait for bundle txs to land on-chain before next round
+            for (const wa of walletAccounts) {
+              await waitForNonce(wa.account.address, wa.nonce + 1)
+            }
+          } else {
+            results.push({ round, price: currentPrice, status: 'bundle-failed', error: bundleResult.error ?? 'unknown' })
+          }
+        } catch (err: any) { results.push({ round, price: currentPrice, status: 'bundle-failed', error: err.message }) }
         if (round < c.options.maxRounds) await sleep(c.options.interval)
       }
       const lastPrice = results.length > 0 ? results[results.length - 1]!.price : 0

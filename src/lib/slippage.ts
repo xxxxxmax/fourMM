@@ -69,8 +69,8 @@ export async function computeVolumeSlippage(
         usedPancake = true
       }
     } catch {
-      // Both paths failed — 0n fallback (no protection, but won't crash)
-      minTokenOut = 0n
+      // Both paths failed — throw so callers refuse to send an unprotected tx
+      throw new Error('Slippage estimation failed: neither bonding-curve tryBuy nor PancakeSwap getAmountsOut returned a quote. Refusing to send tx with 0 slippage protection.')
     }
   }
 
@@ -120,6 +120,6 @@ export async function computeTurnoverSlippage(
     } catch {
       // both failed
     }
-    return { minTokenOut: 0n }
+    throw new Error('Slippage estimation failed: neither bonding-curve tryBuy nor PancakeSwap getAmountsOut returned a quote. Refusing to send tx with 0 slippage protection.')
   }
 }

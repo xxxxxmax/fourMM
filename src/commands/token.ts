@@ -1,5 +1,5 @@
 /**
- * `almm token` command group — Four.meme token operations.
+ * `fourmm token` command group — Four.meme token operations.
  *
  * Week 1 scope: `token info` only. The other 4 token commands
  * (create, pool, identify, graduate-status) arrive in Weeks 2-3.
@@ -7,11 +7,8 @@
 
 import { Cli, z } from 'incur'
 import {
-  createWalletClient,
-  fallback,
   formatEther,
   formatUnits,
-  http,
   isAddress,
   getAddress,
   parseEther,
@@ -21,7 +18,6 @@ import {
   type ReadContractReturnType,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { bsc, bscTestnet } from 'viem/chains'
 import {
   TOKEN_MANAGER_HELPER3,
   TOKEN_MANAGER_V2,
@@ -31,17 +27,14 @@ import { loadConfig } from '../lib/config.js'
 import { tokenManagerHelper3Abi } from '../contracts/tokenManagerHelper3.js'
 import { tokenManager2Abi } from '../contracts/tokenManager2.js'
 import { identifyToken } from '../lib/identify.js'
-import { resolveAlmmPassword, resolveOwsPassphrase } from '../lib/env.js'
+import { resolveFourmmPassword } from '../lib/env.js'
+import { makeWalletClient } from '../lib/walletClient.js'
 import { trackInBackground } from '../lib/tracker.js'
 import { getPublicClient } from '../lib/viem.js'
 import { authenticateFourmeme } from '../fourmeme/auth.js'
 import { uploadTokenImage } from '../fourmeme/upload.js'
 import { createTokenOnApi } from '../fourmeme/create.js'
 import { decryptPrivateKey, getGroup } from '../wallets/groups/store.js'
-import {
-  BSC_CHAIN_ID,
-  treasuryToViemAccount,
-} from '../wallets/treasury.js'
 
 type GetTokenInfoResult = ReadContractReturnType<
   typeof tokenManagerHelper3Abi,
@@ -52,11 +45,11 @@ export const token = Cli.create('token', {
   description: 'Four.meme token operations (info, identify, graduate-status, …)',
 })
   // ============================================================
-  // almm token identify
+  // fourmm token identify
   // ============================================================
   .command('identify', {
     description:
-      'Classify a token (standard / anti-sniper-fee / tax-token / x-mode) via the Four.meme REST API. ALMM will REFUSE to trade tax-token or x-mode.',
+      'Classify a token (standard / anti-sniper-fee / tax-token / x-mode) via the Four.meme REST API. fourMM will REFUSE to trade tax-token or x-mode.',
     options: z.object({
       ca: z
         .string()
@@ -104,7 +97,7 @@ export const token = Cli.create('token', {
         if (result.source === 'not-found') {
           return (
             'Token is not registered with Four.meme. The address may be ' +
-            'wrong, or this token predates the API we query. ALMM will ' +
+            'wrong, or this token predates the API we query. fourMM will ' +
             'refuse to trade it.'
           )
         }
@@ -116,10 +109,10 @@ export const token = Cli.create('token', {
           )
         }
         if (result.variant === 'tax-token') {
-          return 'TaxToken is out of scope — ALMM refuses to market-make on TaxTokens because each round-trip costs 2× the fee rate (10% on a 5% tax). This is by design.'
+          return 'TaxToken is out of scope — fourMM refuses to market-make on TaxTokens because each round-trip costs 2× the fee rate (10% on a 5% tax). This is by design.'
         }
         if (result.variant === 'x-mode') {
-          return 'X Mode token uses a special encoded-args buy interface that ALMM does not implement.'
+          return 'X Mode token uses a special encoded-args buy interface that fourMM does not implement.'
         }
         if (result.variant === 'anti-sniper-fee') {
           return 'Dynamic fee decreases block-by-block post-launch. Slippage should be set higher in the first few blocks.'
@@ -156,7 +149,7 @@ export const token = Cli.create('token', {
     },
   })
   // ============================================================
-  // almm token graduate-status
+  // fourmm token graduate-status
   // ============================================================
   .command('graduate-status', {
     description:
@@ -272,7 +265,7 @@ export const token = Cli.create('token', {
     },
   })
   // ============================================================
-  // almm token info
+  // fourmm token info
   // ============================================================
   .command('info', {
     description:
@@ -438,7 +431,7 @@ export const token = Cli.create('token', {
     },
   })
   // ============================================================
-  // almm token create
+  // fourmm token create
   // ============================================================
   .command('create', {
     description:
@@ -456,7 +449,6 @@ export const token = Cli.create('token', {
       devWallet: z.coerce.number().int().positive().optional().describe('Group ID for dev wallet (uses first wallet). Required for on-chain tx.'),
       dryRun: z.boolean().default(false).describe('REST API only — skip on-chain createToken'),
       password: z.string().optional(),
-      owsPassphrase: z.string().optional(),
     }),
     output: z.object({
       name: z.string(),
@@ -470,19 +462,19 @@ export const token = Cli.create('token', {
     }),
     async run(c) {
       // Resolve the dev wallet private key for signing
-      const almmPassword = resolveAlmmPassword(c.options.password)
+      const fourmmPassword = resolveFourmmPassword(c.options.password)
       let devPrivateKey: Hex | undefined
       let devAddress: Address | undefined
 
       if (c.options.devWallet) {
-        if (!almmPassword) {
+        if (!fourmmPassword) {
           return c.error({ code: 'NO_PASSWORD', message: 'Password required for dev wallet' })
         }
-        const group = getGroup(almmPassword, c.options.devWallet)
+        const group = getGroup(fourmmPassword, c.options.devWallet)
         if (!group || group.wallets.length === 0) {
           return c.error({ code: 'GROUP_NOT_FOUND', message: `Dev wallet group ${c.options.devWallet} not found` })
         }
-        devPrivateKey = decryptPrivateKey(group.wallets[0]!, almmPassword)
+        devPrivateKey = decryptPrivateKey(group.wallets[0]!, fourmmPassword)
         devAddress = group.wallets[0]!.address
       } else if (!c.options.dryRun) {
         return c.error({
@@ -539,6 +531,7 @@ export const token = Cli.create('token', {
             twitter: c.options.twitter,
             website: c.options.website,
             telegram: c.options.telegram,
+            preSale: c.options.presetBuy > 0 ? c.options.presetBuy.toString() : '0',
           },
           auth.accessToken,
         )
@@ -563,15 +556,8 @@ export const token = Cli.create('token', {
       // Step 4: On-chain createToken
       const config = loadConfig()
       const account = privateKeyToAccount(devPrivateKey!)
-      const chain = config.network === 'bsc-testnet' ? bscTestnet : bsc
-      const transports = [config.rpcUrl, ...config.fallbackRpcUrls]
-        .filter((url): url is string => Boolean(url))
-        .map((url) => http(url, { timeout: 15_000 }))
-      const walletClient = createWalletClient({
-        account,
-        chain,
-        transport: fallback(transports, { rank: false }),
-      })
+      const walletClient = makeWalletClient(account, config)
+      const chain = walletClient.chain!
       const publicClient = getPublicClient()
 
       let txHash: Hash
@@ -678,7 +664,7 @@ export const token = Cli.create('token', {
     },
   })
   // ============================================================
-  // almm token pool
+  // fourmm token pool
   // ============================================================
   .command('pool', {
     description: 'Show pool / liquidity info for a token via TokenManagerHelper3.',

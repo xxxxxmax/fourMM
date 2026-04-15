@@ -1,7 +1,7 @@
 /**
  * viem ABI binding for TokenManagerHelper3.
  *
- * Only the methods ALMM uses are declared here — we don't need the full ABI.
+ * Only the methods fourMM uses are declared here — we don't need the full ABI.
  *
  * Source: docs/API-Documents.03-03-2026.md §TokenManagerHelper3 (V3)
  * Address: 0xF251F83e40a78868FcfA3FA4599Dad6494E46034 (BSC mainnet)

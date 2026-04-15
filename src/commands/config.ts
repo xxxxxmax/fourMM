@@ -1,5 +1,5 @@
 /**
- * `almm config` command group — manage ~/.almm/config.json.
+ * `fourmm config` command group — manage ~/.fourmm/config.json.
  *
  * Subcommands:
  *   - init: create config file with defaults (or overrides)
@@ -17,10 +17,10 @@ import {
 } from '../lib/config.js'
 
 export const config = Cli.create('config', {
-  description: 'Manage ALMM configuration (~/.almm/config.json)',
+  description: 'Manage fourMM configuration (~/.fourmm/config.json)',
 })
   // ============================================================
-  // almm config init
+  // fourmm config init
   // ============================================================
   .command('init', {
     description: 'Initialize config file with defaults (optionally override key fields)',
@@ -37,10 +37,6 @@ export const config = Cli.create('config', {
         .max(5000)
         .optional()
         .describe('Default slippage in basis points (100 = 1%)'),
-      treasuryWallet: z
-        .string()
-        .optional()
-        .describe('OWS treasury wallet name'),
     }),
     examples: [
       { description: 'Initialize with defaults' },
@@ -49,8 +45,8 @@ export const config = Cli.create('config', {
         description: 'Initialize with a custom RPC URL',
       },
       {
-        options: { slippageBps: 500, treasuryWallet: 'my-treasury' },
-        description: 'Initialize with 5% default slippage and a treasury wallet name',
+        options: { slippageBps: 500 },
+        description: 'Initialize with 5% default slippage',
       },
     ],
     output: z.object({
@@ -64,9 +60,6 @@ export const config = Cli.create('config', {
       if (c.options.network) overrides.network = c.options.network
       if (c.options.slippageBps !== undefined)
         overrides.defaultSlippageBps = c.options.slippageBps
-      if (c.options.treasuryWallet)
-        overrides.treasuryWallet = c.options.treasuryWallet
-
       const config = initConfig(overrides)
       return c.ok(
         {
@@ -81,11 +74,6 @@ export const config = Cli.create('config', {
                 command: 'config get',
                 description: 'View the full config',
               },
-              {
-                command: 'ows init',
-                args: { name: config.treasuryWallet },
-                description: 'Create your OWS treasury wallet',
-              },
             ],
           },
         },
@@ -93,7 +81,7 @@ export const config = Cli.create('config', {
     },
   })
   // ============================================================
-  // almm config set <key> <value>
+  // fourmm config set <key> <value>
   // ============================================================
   .command('set', {
     description: 'Set a single configuration value',
@@ -109,10 +97,6 @@ export const config = Cli.create('config', {
       {
         args: { key: 'defaultSlippageBps', value: '500' },
         description: 'Set default slippage to 5%',
-      },
-      {
-        args: { key: 'treasuryWallet', value: 'my-treasury' },
-        description: 'Pin the treasury wallet name',
       },
     ],
     output: z.object({
@@ -137,7 +121,7 @@ export const config = Cli.create('config', {
     },
   })
   // ============================================================
-  // almm config get [key]
+  // fourmm config get [key]
   // ============================================================
   .command('get', {
     description: 'Read a single configuration value, or the entire config when called without --key',

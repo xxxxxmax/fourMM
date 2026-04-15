@@ -21,7 +21,7 @@ let tmpHome: string
 let realHome: string | undefined
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'almm-store-test-'))
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'fourmm-store-test-'))
   realHome = process.env.HOME
   process.env.HOME = tmpHome
 })
@@ -31,7 +31,7 @@ afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true })
 })
 
-const storeFile = () => path.join(tmpHome, '.almm', 'wallets', 'wallet-store.json')
+const storeFile = () => path.join(tmpHome, '.fourmm', 'wallets', 'wallet-store.json')
 
 describe('loadStore', () => {
   it('returns null when the file does not exist and does NOT write', () => {

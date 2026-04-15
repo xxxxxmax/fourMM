@@ -1,5 +1,5 @@
 /**
- * DataStore — local JSON store at ~/.almm/data/.
+ * DataStore — local JSON store at ~/.fourmm/data/.
  *
  * Responsibilities:
  *   - Persist token metadata, pool info, transaction history, holdings, balances

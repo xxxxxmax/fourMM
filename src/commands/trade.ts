@@ -1,5 +1,5 @@
 /**
- * `almm trade` command group — buy, sell, sniper, batch.
+ * `fourmm trade` command group — buy, sell, sniper, batch.
  *
  * Week 3: Router deployed at 0x5A3A...84C1. Live broadcast enabled for
  * buy / sell on bonding-curve tokens. PancakeSwap graduated path uses
@@ -21,16 +21,18 @@ import {
   http,
   isAddress,
   parseEther,
+  parseUnits,
   type Address,
   type Hash,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { bsc, bscTestnet } from 'viem/chains'
-import { TOKEN_MANAGER_HELPER3, requireRouter } from '../lib/const.js'
+import { PANCAKE_V2_ROUTER, TOKEN_MANAGER_HELPER3, WBNB, requireRouter } from '../lib/const.js'
 import { loadConfig, type CliConfig } from '../lib/config.js'
 import { tokenManagerHelper3Abi } from '../contracts/tokenManagerHelper3.js'
 import { tokenManager2Abi } from '../contracts/tokenManager2.js'
 import { erc20Abi } from '../contracts/erc20.js'
+import { pancakeRouterAbi } from '../contracts/pancakeRouter.js'
 import { fourmemeMmRouterAbi } from '../contracts/fourmemeMmRouter.js'
 import { computeVolumeSlippage } from '../lib/slippage.js'
 import {
@@ -38,7 +40,7 @@ import {
   TokenNotFoundError,
   UnsupportedTokenError,
 } from '../lib/guards.js'
-import { resolveAlmmPassword } from '../lib/env.js'
+import { resolveFourmmPassword } from '../lib/env.js'
 import { resolveTradingPath } from '../lib/routing.js'
 import { trackInBackground } from '../lib/tracker.js'
 import { getPublicClient } from '../lib/viem.js'
@@ -50,7 +52,7 @@ export const trade = Cli.create('trade', {
   description: 'Execute or simulate trades (buy, sell, sniper, batch)',
 })
   // ============================================================
-  // almm trade buy
+  // fourmm trade buy
   // ============================================================
   .command('buy', {
     description:
@@ -83,7 +85,7 @@ export const trade = Cli.create('trade', {
       password: z
         .string()
         .optional()
-        .describe('In-house master password (or ALMM_PASSWORD env)'),
+        .describe('In-house master password (or FOURMM_PASSWORD env)'),
     }),
     examples: [
       {
@@ -143,12 +145,12 @@ export const trade = Cli.create('trade', {
       }
       const ca = getAddress(c.options.token) as Address
 
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'ALMM master password required (--password or ALMM_PASSWORD env)',
+            'fourMM master password required (--password or FOURMM_PASSWORD env)',
         })
       }
 
@@ -206,21 +208,12 @@ export const trade = Cli.create('trade', {
       const tradingPath = routing.tradingPath
       const tokenInfo = routing.rawInfo
 
-      // Week 2: only bonding-curve path works with Helper3.tryBuy. Pancake
-      // path arrives with the Router in Week 3.
-      if (tradingPath.path === 'pancake') {
-        return c.error({
-          code: 'PANCAKE_PATH_NOT_YET',
-          message:
-            `Token ${ca} has graduated to PancakeSwap. Week 2 dry-run only supports bonding-curve tokens; graduated token trading arrives with the Week-3 Router.`,
-        })
-      }
-
       // ---- Verify launch has happened (reuses rawInfo from resolveTradingPath) ----
       const launchTime = tokenInfo[6]
       const nowUnix = BigInt(Math.floor(Date.now() / 1000))
       const tradeable = launchTime > 0n && launchTime <= nowUnix
-      if (!tradeable) {
+      // Graduated tokens are always tradeable
+      if (!tradeable && tradingPath.path !== 'pancake') {
         return c.error({
           code: 'NOT_TRADEABLE',
           message:
@@ -230,40 +223,61 @@ export const trade = Cli.create('trade', {
         })
       }
 
-      // ---- Single tryBuy call (pure function of token + amount) ----
-      // Note: estimatedTokens is formatted with 18 decimals. Four.meme's
-      // current protocol issues all tokens with 18 decimals (verified via
-      // Helper3.getTokenInfo returning raw values that match the advertised
-      // 1B supply when divided by 10^18). If Four.meme ever ships a
-      // different-decimals variant this display will be off and we'll need
-      // to read the token's ERC20.decimals() explicitly.
+      // ---- Estimate tokens out ----
       const perWalletBnbWei = parseEther(c.options.amount.toString())
       let estimate
-      try {
-        const result = await client.readContract({
-          address: TOKEN_MANAGER_HELPER3,
-          abi: tokenManagerHelper3Abi,
-          functionName: 'tryBuy',
-          args: [ca, 0n, perWalletBnbWei],
-        })
-        const [, , estimatedAmount, estimatedCost, estimatedFee] = result
-        const slippageBps = BigInt(c.options.slippage)
-        const minAmountOut =
-          (estimatedAmount * (10_000n - slippageBps)) / 10_000n
-        estimate = {
-          estimatedTokens: formatUnits(estimatedAmount, 18),
-          estimatedCost: `${formatEther(estimatedCost)} BNB`,
-          estimatedFee: `${formatEther(estimatedFee)} BNB`,
-          minAmountOut: formatUnits(minAmountOut, 18),
+      const slippageBps = BigInt(c.options.slippage)
+
+      if (tradingPath.path === 'pancake') {
+        // PancakeSwap: use getAmountsOut for estimation
+        try {
+          const amounts = await client.readContract({
+            address: PANCAKE_V2_ROUTER,
+            abi: pancakeRouterAbi,
+            functionName: 'getAmountsOut',
+            args: [perWalletBnbWei, [WBNB, ca]],
+          })
+          const estimatedAmount = amounts[1]!
+          const minAmountOut = (estimatedAmount * (10_000n - slippageBps)) / 10_000n
+          estimate = {
+            estimatedTokens: formatUnits(estimatedAmount, 18),
+            estimatedCost: `${c.options.amount} BNB`,
+            estimatedFee: '0 BNB',
+            minAmountOut: formatUnits(minAmountOut, 18),
+          }
+        } catch (err) {
+          return c.error({
+            code: 'ESTIMATE_FAILED',
+            message: err instanceof Error
+              ? `PancakeSwap getAmountsOut failed: ${err.message}`
+              : 'getAmountsOut failed',
+          })
         }
-      } catch (err) {
-        return c.error({
-          code: 'TRYBUY_FAILED',
-          message:
-            err instanceof Error
+      } else {
+        // Bonding curve: use Helper3.tryBuy
+        try {
+          const result = await client.readContract({
+            address: TOKEN_MANAGER_HELPER3,
+            abi: tokenManagerHelper3Abi,
+            functionName: 'tryBuy',
+            args: [ca, 0n, perWalletBnbWei],
+          })
+          const [, , estimatedAmount, estimatedCost, estimatedFee] = result
+          const minAmountOut = (estimatedAmount * (10_000n - slippageBps)) / 10_000n
+          estimate = {
+            estimatedTokens: formatUnits(estimatedAmount, 18),
+            estimatedCost: `${formatEther(estimatedCost)} BNB`,
+            estimatedFee: `${formatEther(estimatedFee)} BNB`,
+            minAmountOut: formatUnits(minAmountOut, 18),
+          }
+        } catch (err) {
+          return c.error({
+            code: 'TRYBUY_FAILED',
+            message: err instanceof Error
               ? `tryBuy(${ca}, ${c.options.amount} BNB) failed: ${err.message}`
               : 'tryBuy failed',
-        })
+          })
+        }
       }
 
       const totalSpend = c.options.amount * group.wallets.length
@@ -321,41 +335,80 @@ export const trade = Cli.create('trade', {
         )
       }
 
-      // ---- Live: sign + send buyTokenAMAP for each wallet ----
+      // ---- Live: sign + send buy for each wallet ----
       const config = loadConfig()
-      const slippageBps = BigInt(c.options.slippage)
       const results: Array<{
         wallet: string
         status: string
         txHash?: string
         error?: string
       }> = []
+      // Track the latest confirmed block so subsequent readContract calls
+      // read post-buy state (RPC "latest" can lag 1-2 blocks behind).
+      let lastConfirmedBlock: bigint | undefined
+      const walletCount = group.wallets.length
 
-      for (const w of group.wallets) {
+      for (let wi = 0; wi < walletCount; wi++) {
+        const w = group.wallets[wi]!
         try {
           const pk = decryptPrivateKey(w, password)
           const account = privateKeyToAccount(pk)
           const wc = makeWalletClient(account, config)
 
-          // Estimate minAmount with slippage for this specific call
-          const tryResult = await client.readContract({
-            address: TOKEN_MANAGER_HELPER3,
-            abi: tokenManagerHelper3Abi,
-            functionName: 'tryBuy',
-            args: [ca, 0n, perWalletBnbWei],
-          })
-          const minAmount =
-            (tryResult[2] * (10_000n - slippageBps)) / 10_000n
+          let hash: string
+          const readAt = lastConfirmedBlock ? { blockNumber: lastConfirmedBlock } : {}
 
-          const hash = await wc.writeContract({
-            address: tradingPath.router,
-            abi: tokenManager2Abi,
-            functionName: 'buyTokenAMAP',
-            args: [ca, perWalletBnbWei, minAmount],
-            value: perWalletBnbWei,
-            chain: wc.chain!,
-            account,
-          })
+          if (tradingPath.path === 'pancake') {
+            const amounts = await client.readContract({
+              address: PANCAKE_V2_ROUTER,
+              abi: pancakeRouterAbi,
+              functionName: 'getAmountsOut',
+              args: [perWalletBnbWei, [WBNB, ca]],
+              ...readAt,
+            })
+            const minAmount = (amounts[1]! * (10_000n - slippageBps)) / 10_000n
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 300)
+
+            hash = await wc.writeContract({
+              address: PANCAKE_V2_ROUTER,
+              abi: pancakeRouterAbi,
+              functionName: 'swapExactETHForTokens',
+              args: [minAmount, [WBNB, ca], account.address, deadline],
+              value: perWalletBnbWei,
+              chain: wc.chain!,
+              account,
+            })
+          } else {
+            const tryResult = await client.readContract({
+              address: TOKEN_MANAGER_HELPER3,
+              abi: tokenManagerHelper3Abi,
+              functionName: 'tryBuy',
+              args: [ca, 0n, perWalletBnbWei],
+              ...readAt,
+            })
+            const minAmount = (tryResult[2] * (10_000n - slippageBps)) / 10_000n
+
+            hash = await wc.writeContract({
+              address: tradingPath.router,
+              abi: tokenManager2Abi,
+              functionName: 'buyTokenAMAP',
+              args: [ca, perWalletBnbWei, minAmount],
+              value: perWalletBnbWei,
+              chain: wc.chain!,
+              account,
+            })
+          }
+
+          // Always wait for receipt — report confirmed/failed, not just broadcast
+          let receipt: any
+          let status = 'broadcast'
+          try {
+            receipt = await client.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 30_000 })
+            lastConfirmedBlock = receipt.blockNumber
+            status = receipt.status === 'success' ? 'confirmed' : 'failed (reverted)'
+          } catch {
+            status = 'broadcast (receipt timeout)'
+          }
 
           trackInBackground(client, hash as Hash, {
             ca,
@@ -363,9 +416,9 @@ export const trade = Cli.create('trade', {
             walletAddress: account.address,
             txType: 'buy',
             knownAmountBnb: -c.options.amount,
-          })
+          }, 30_000, receipt)
 
-          results.push({ wallet: w.address, status: 'broadcast', txHash: hash })
+          results.push({ wallet: w.address, status, txHash: hash })
         } catch (err) {
           results.push({
             wallet: w.address,
@@ -419,7 +472,7 @@ export const trade = Cli.create('trade', {
     },
   })
   // ============================================================
-  // almm trade sell
+  // fourmm trade sell
   // ============================================================
   .command('sell', {
     description:
@@ -452,7 +505,7 @@ export const trade = Cli.create('trade', {
       password: z
         .string()
         .optional()
-        .describe('In-house master password (or ALMM_PASSWORD env)'),
+        .describe('In-house master password (or FOURMM_PASSWORD env)'),
     }),
     examples: [
       {
@@ -499,11 +552,11 @@ export const trade = Cli.create('trade', {
       }
       const ca = getAddress(c.options.token) as Address
 
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
-          message: 'ALMM master password required',
+          message: 'fourMM master password required',
         })
       }
 
@@ -536,12 +589,7 @@ export const trade = Cli.create('trade', {
         })
       }
 
-      if (routing.tradingPath.path === 'pancake') {
-        return c.error({
-          code: 'PANCAKE_SELL_NOT_YET',
-          message: 'Graduated token selling through PancakeSwap is not yet implemented. Use PancakeSwap directly.',
-        })
-      }
+      const isPancake = routing.tradingPath.path === 'pancake'
 
       // Parse amount mode
       const amountRaw = c.options.amount
@@ -556,6 +604,14 @@ export const trade = Cli.create('trade', {
       }
 
       const config = loadConfig()
+
+      // Read token decimals once (Four.meme tokens are 18, but we don't assume)
+      let tokenDecimals = 18
+      try {
+        const d = await client.readContract({ address: ca, abi: erc20Abi, functionName: 'decimals' })
+        tokenDecimals = Number(d)
+      } catch { /* fall back to 18 */ }
+
       const results: Array<{
         wallet: string
         tokenBalance: string
@@ -564,15 +620,18 @@ export const trade = Cli.create('trade', {
         txHash?: string
         error?: string
       }> = []
+      let lastConfirmedBlock: bigint | undefined
 
       for (const w of group.wallets) {
         try {
-          // Read token balance
+          // Read token balance at confirmed block for sequential consistency
+          const readAt = lastConfirmedBlock ? { blockNumber: lastConfirmedBlock } : {}
           const balance = await client.readContract({
             address: ca,
             abi: erc20Abi,
             functionName: 'balanceOf',
             args: [w.address],
+            ...readAt,
           })
 
           if (balance === 0n) {
@@ -600,12 +659,12 @@ export const trade = Cli.create('trade', {
                 message: `Expected a positive number, "all", or "NN%", got "${amountRaw}"`,
               })
             }
-            sellAmount = parseEther(amountRaw)
+            sellAmount = parseUnits(amountRaw, tokenDecimals)
             if (sellAmount > balance) {
               results.push({
                 wallet: w.address,
-                tokenBalance: formatUnits(balance, 18),
-                sellAmount: formatUnits(sellAmount, 18),
+                tokenBalance: formatUnits(balance, tokenDecimals),
+                sellAmount: formatUnits(sellAmount, tokenDecimals),
                 status: 'insufficient-balance',
               })
               continue
@@ -615,7 +674,7 @@ export const trade = Cli.create('trade', {
           if (sellAmount === 0n) {
             results.push({
               wallet: w.address,
-              tokenBalance: formatUnits(balance, 18),
+              tokenBalance: formatUnits(balance, tokenDecimals),
               sellAmount: '0',
               status: 'nothing-to-sell',
             })
@@ -623,25 +682,40 @@ export const trade = Cli.create('trade', {
           }
 
           if (c.options.dryRun) {
-            // Estimate via trySell
+            // Estimate via trySell (bonding curve) or getAmountsOut (pancake)
             try {
-              const est = await client.readContract({
-                address: TOKEN_MANAGER_HELPER3,
-                abi: tokenManagerHelper3Abi,
-                functionName: 'trySell',
-                args: [ca, sellAmount],
-              })
-              results.push({
-                wallet: w.address,
-                tokenBalance: formatUnits(balance, 18),
-                sellAmount: formatUnits(sellAmount, 18),
-                status: `ready (est: ${formatEther(est[2])} BNB, fee: ${formatEther(est[3])} BNB)`,
-              })
+              if (isPancake) {
+                const amounts = await client.readContract({
+                  address: PANCAKE_V2_ROUTER,
+                  abi: pancakeRouterAbi,
+                  functionName: 'getAmountsOut',
+                  args: [sellAmount, [ca, WBNB]],
+                })
+                results.push({
+                  wallet: w.address,
+                  tokenBalance: formatUnits(balance, tokenDecimals),
+                  sellAmount: formatUnits(sellAmount, tokenDecimals),
+                  status: `ready (est: ${formatEther(amounts[1]!)} BNB via PancakeSwap)`,
+                })
+              } else {
+                const est = await client.readContract({
+                  address: TOKEN_MANAGER_HELPER3,
+                  abi: tokenManagerHelper3Abi,
+                  functionName: 'trySell',
+                  args: [ca, sellAmount],
+                })
+                results.push({
+                  wallet: w.address,
+                  tokenBalance: formatUnits(balance, tokenDecimals),
+                  sellAmount: formatUnits(sellAmount, tokenDecimals),
+                  status: `ready (est: ${formatEther(est[2])} BNB, fee: ${formatEther(est[3])} BNB)`,
+                })
+              }
             } catch {
               results.push({
                 wallet: w.address,
-                tokenBalance: formatUnits(balance, 18),
-                sellAmount: formatUnits(sellAmount, 18),
+                tokenBalance: formatUnits(balance, tokenDecimals),
+                sellAmount: formatUnits(sellAmount, tokenDecimals),
                 status: 'ready (estimate unavailable)',
               })
             }
@@ -652,7 +726,7 @@ export const trade = Cli.create('trade', {
           const pk = decryptPrivateKey(w, password)
           const account = privateKeyToAccount(pk)
           const wc = makeWalletClient(account, config)
-          const mgr = routing.tradingPath.router
+          const sellTarget = isPancake ? PANCAKE_V2_ROUTER : routing.tradingPath.router
 
           // Approve — MUST wait for confirmation before selling, otherwise
           // the sell tx can land before the approve and revert.
@@ -660,7 +734,7 @@ export const trade = Cli.create('trade', {
             address: ca,
             abi: erc20Abi,
             functionName: 'approve',
-            args: [mgr, sellAmount],
+            args: [sellTarget, sellAmount],
             chain: wc.chain!,
             account,
           })
@@ -669,29 +743,45 @@ export const trade = Cli.create('trade', {
             timeout: 30_000,
           })
 
-          // Sell (approve is now confirmed on-chain)
-          const hash = await wc.writeContract({
-            address: mgr,
-            abi: tokenManager2Abi,
-            functionName: 'sellToken',
-            args: [ca, sellAmount],
-            chain: wc.chain!,
-            account,
-          })
+          let hash: string
+          if (isPancake) {
+            // PancakeSwap: swapExactTokensForETHSupportingFeeOnTransferTokens
+            const amounts = await client.readContract({
+              address: PANCAKE_V2_ROUTER,
+              abi: pancakeRouterAbi,
+              functionName: 'getAmountsOut',
+              args: [sellAmount, [ca, WBNB]],
+              ...readAt,
+            })
+            const minBnbOut = (amounts[1]! * (10_000n - BigInt(c.options.slippage))) / 10_000n
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 300)
 
-          trackInBackground(client, hash as Hash, {
-            ca,
-            groupId: c.options.group,
-            walletAddress: account.address,
-            txType: 'sell',
-          })
+            hash = await wc.writeContract({
+              address: PANCAKE_V2_ROUTER,
+              abi: pancakeRouterAbi,
+              functionName: 'swapExactTokensForETHSupportingFeeOnTransferTokens',
+              args: [sellAmount, minBnbOut, [ca, WBNB], account.address, deadline],
+              chain: wc.chain!,
+              account,
+            })
+          } else {
+            // Bonding curve: TokenManager2.sellToken
+            hash = await wc.writeContract({
+              address: sellTarget,
+              abi: tokenManager2Abi,
+              functionName: 'sellToken',
+              args: [ca, sellAmount],
+              chain: wc.chain!,
+              account,
+            })
+          }
 
-          // Post-sell verification: wait for receipt then check if balance actually changed.
-          // Four.meme may have a buy-then-sell cooldown where sellToken "succeeds" (status=1,
-          // events emitted) but the actual state isn't modified. Warn the user if detected.
+          // Post-sell verification: wait for receipt then check if balance changed.
           let sellVerified = 'broadcast'
+          let sellReceipt: any
           try {
-            await client.waitForTransactionReceipt({ hash: hash as Hash, timeout: 30_000 })
+            sellReceipt = await client.waitForTransactionReceipt({ hash: hash as Hash, timeout: 30_000 })
+            lastConfirmedBlock = sellReceipt.blockNumber
             const postBalance = await client.readContract({
               address: ca, abi: erc20Abi, functionName: 'balanceOf', args: [w.address],
             })
@@ -704,10 +794,18 @@ export const trade = Cli.create('trade', {
             sellVerified = 'broadcast (verification timeout)'
           }
 
+          // Pass pre-fetched receipt so tracker doesn't re-wait
+          trackInBackground(client, hash as Hash, {
+            ca,
+            groupId: c.options.group,
+            walletAddress: account.address,
+            txType: 'sell',
+          }, 30_000, sellReceipt)
+
           results.push({
             wallet: w.address,
-            tokenBalance: formatUnits(balance, 18),
-            sellAmount: formatUnits(sellAmount, 18),
+            tokenBalance: formatUnits(balance, tokenDecimals),
+            sellAmount: formatUnits(sellAmount, tokenDecimals),
             status: sellVerified,
             txHash: hash,
           })
@@ -742,11 +840,11 @@ export const trade = Cli.create('trade', {
               {
                 command: 'transfer in',
                 options: {
-                  to: 'treasury',
+                  to: '<your-address>',
                   fromGroup: c.options.group,
                   amount: 'all',
                 },
-                description: 'Collect remaining BNB back to treasury',
+                description: 'Collect remaining BNB',
               },
             ],
           },
@@ -755,7 +853,7 @@ export const trade = Cli.create('trade', {
     },
   })
   // ============================================================
-  // almm trade sniper
+  // fourmm trade sniper
   // ============================================================
   .command('sniper', {
     description: 'Sniper buy: each wallet uses its own BNB amount. Count must match wallet count.',
@@ -773,7 +871,7 @@ export const trade = Cli.create('trade', {
     }),
     async run(c) {
       const ca = getAddress(c.options.token) as Address
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'Password required' })
       const group = getGroup(password, c.options.group)
       if (!group || group.wallets.length === 0) return c.error({ code: 'GROUP_NOT_FOUND', message: 'Group not found or empty' })
@@ -788,23 +886,28 @@ export const trade = Cli.create('trade', {
       const config = loadConfig()
       const slippageBps = BigInt(c.options.slippage)
       const results: Array<{ wallet: string; amount: string; status: string; txHash?: string; error?: string }> = []
+      let lastConfirmedBlock: bigint | undefined
       for (let i = 0; i < group.wallets.length; i++) {
         const w = group.wallets[i]!; const bnb = amounts[i]!; const bnbWei = parseEther(bnb.toString())
         if (c.options.dryRun) { results.push({ wallet: w.address, amount: `${bnb} BNB`, status: 'ready' }); continue }
         try {
           const pk = decryptPrivateKey(w, password); const account = privateKeyToAccount(pk); const wc = makeWalletClient(account, config)
-          const tryR = await client.readContract({ address: TOKEN_MANAGER_HELPER3, abi: tokenManagerHelper3Abi, functionName: 'tryBuy', args: [ca, 0n, bnbWei] })
+          // Read at the confirmed block so tryBuy sees post-buy state
+          const readAt = lastConfirmedBlock ? { blockNumber: lastConfirmedBlock } : {}
+          const tryR = await client.readContract({ address: TOKEN_MANAGER_HELPER3, abi: tokenManagerHelper3Abi, functionName: 'tryBuy', args: [ca, 0n, bnbWei], ...readAt })
           const min = (tryR[2] * (10_000n - slippageBps)) / 10_000n
           const hash = await wc.writeContract({ address: routing.tradingPath.router, abi: tokenManager2Abi, functionName: 'buyTokenAMAP', args: [ca, bnbWei, min], value: bnbWei, chain: wc.chain!, account })
-          trackInBackground(client, hash as Hash, { ca, groupId: c.options.group, walletAddress: account.address, txType: 'buy', knownAmountBnb: -bnb })
-          results.push({ wallet: w.address, amount: `${bnb} BNB`, status: 'broadcast', txHash: hash })
+          let receipt: any; let status = 'broadcast'
+          try { receipt = await client.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 30_000 }); lastConfirmedBlock = receipt.blockNumber; status = receipt.status === 'success' ? 'confirmed' : 'failed (reverted)' } catch { status = 'broadcast (receipt timeout)' }
+          trackInBackground(client, hash as Hash, { ca, groupId: c.options.group, walletAddress: account.address, txType: 'buy', knownAmountBnb: -bnb }, 30_000, receipt)
+          results.push({ wallet: w.address, amount: `${bnb} BNB`, status, txHash: hash })
         } catch (err: any) { results.push({ wallet: w.address, amount: `${bnb} BNB`, status: 'failed', error: err.message }) }
       }
       return c.ok({ token: ca, group: c.options.group, dryRun: c.options.dryRun, results }, { cta: { commands: [{ command: 'query monitor', options: { group: c.options.group, token: ca }, description: 'Check holdings' }] } })
     },
   })
   // ============================================================
-  // almm trade batch (Router.volume — atomic buy+sell)
+  // fourmm trade batch (Router.volume — atomic buy+sell)
   // ============================================================
   .command('batch', {
     description: 'Atomic buy+sell via Router. Each wallet does a round-trip in one tx (zero net position).',
@@ -823,7 +926,7 @@ export const trade = Cli.create('trade', {
     }),
     async run(c) {
       const ca = getAddress(c.options.token) as Address
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'Password required' })
       const group = getGroup(password, c.options.group)
       if (!group || group.wallets.length === 0) return c.error({ code: 'GROUP_NOT_FOUND', message: 'Group not found or empty' })
@@ -846,7 +949,7 @@ export const trade = Cli.create('trade', {
         try {
           const pk = decryptPrivateKey(w, password); const account = privateKeyToAccount(pk); const wc = makeWalletClient(account, config)
           const hash = await wc.writeContract({ address: routerAddr, abi: fourmemeMmRouterAbi, functionName: routerFn, args: [ca, minTokenOut, minBnbBack], value: bnbWei, chain: wc.chain!, account })
-          trackInBackground(client, hash as Hash, { ca, groupId: c.options.group, walletAddress: account.address, txType: 'buy' })
+          trackInBackground(client, hash as Hash, { ca, groupId: c.options.group, walletAddress: account.address, txType: 'volume' })
           results.push({ wallet: w.address, status: 'broadcast', txHash: hash })
         } catch (err: any) { results.push({ wallet: w.address, status: 'failed', error: err.message }) }
       }

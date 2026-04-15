@@ -1,9 +1,8 @@
 /**
- * `almm wallet` command group — manage in-house wallet groups.
+ * `fourmm wallet` command group — manage in-house wallet groups.
  *
- * These wallets are NOT stored in OWS. They live in ~/.almm/wallets/,
- * encrypted with a master password, and are designed for batch operations
- * (sniper groups, volume bots) where OWS's single-wallet model is too heavy.
+ * These wallets live in ~/.fourmm/wallets/, encrypted with a master password,
+ * and are designed for batch operations (sniper groups, volume bots).
  *
  * Week 1 scope: create-group, list-groups. The other 9 wallet commands
  * (generate, group-info, add, import, export, etc.) are Week 2.
@@ -12,7 +11,7 @@
 import fs from 'node:fs'
 import { Cli, z } from 'incur'
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
-import { resolveAlmmPassword } from '../lib/env.js'
+import { resolveFourmmPassword } from '../lib/env.js'
 import { getDataStore } from '../datastore/index.js'
 import { getTokenPrice } from '../lib/pricing.js'
 import { getPublicClient } from '../lib/viem.js'
@@ -33,7 +32,7 @@ export const wallet = Cli.create('wallet', {
   description: 'Manage in-house wallet groups (sniper / volume bot wallets)',
 })
   // ============================================================
-  // almm wallet create-group
+  // fourmm wallet create-group
   // ============================================================
   .command('create-group', {
     description:
@@ -51,7 +50,7 @@ export const wallet = Cli.create('wallet', {
       password: z
         .string()
         .optional()
-        .describe('Master password (or set ALMM_PASSWORD env var)'),
+        .describe('Master password (or set FOURMM_PASSWORD env var)'),
     }),
     examples: [
       {
@@ -71,12 +70,12 @@ export const wallet = Cli.create('wallet', {
       message: z.string(),
     }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'No master password. Pass --password or set ALMM_PASSWORD env var.',
+            'No master password. Pass --password or set FOURMM_PASSWORD env var.',
         })
       }
 
@@ -113,11 +112,11 @@ export const wallet = Cli.create('wallet', {
               {
                 command: 'transfer out',
                 options: {
-                  from: 'treasury',
+                  from: '<your-wallet-address>',
                   toGroup: group.groupId,
                   value: 0.1,
                 },
-                description: `Fund the group from the treasury (0.1 BNB each)`,
+                description: `Fund the group (0.1 BNB each)`,
               },
             ],
           },
@@ -126,7 +125,7 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet generate
+  // fourmm wallet generate
   // ============================================================
   .command('generate', {
     description:
@@ -147,7 +146,7 @@ export const wallet = Cli.create('wallet', {
       password: z
         .string()
         .optional()
-        .describe('Master password (or set ALMM_PASSWORD env var)'),
+        .describe('Master password (or set FOURMM_PASSWORD env var)'),
     }),
     examples: [
       {
@@ -167,12 +166,12 @@ export const wallet = Cli.create('wallet', {
       message: z.string(),
     }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'No master password. Pass --password or set ALMM_PASSWORD env var.',
+            'No master password. Pass --password or set FOURMM_PASSWORD env var.',
         })
       }
 
@@ -181,7 +180,7 @@ export const wallet = Cli.create('wallet', {
       if (!existing) {
         return c.error({
           code: 'GROUP_NOT_FOUND',
-          message: `Group ${c.options.group} does not exist. Run \`almm wallet create-group\` first.`,
+          message: `Group ${c.options.group} does not exist. Run \`fourmm wallet create-group\` first.`,
         })
       }
 
@@ -219,7 +218,7 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet add
+  // fourmm wallet add
   // ============================================================
   .command('add', {
     description:
@@ -241,7 +240,7 @@ export const wallet = Cli.create('wallet', {
       password: z
         .string()
         .optional()
-        .describe('Master password (or set ALMM_PASSWORD env var)'),
+        .describe('Master password (or set FOURMM_PASSWORD env var)'),
     }),
     examples: [
       {
@@ -262,12 +261,12 @@ export const wallet = Cli.create('wallet', {
     }),
     outputPolicy: 'all',
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'No master password. Pass --password or set ALMM_PASSWORD env var.',
+            'No master password. Pass --password or set FOURMM_PASSWORD env var.',
         })
       }
 
@@ -326,7 +325,7 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet group-info
+  // fourmm wallet group-info
   // ============================================================
   .command('group-info', {
     description:
@@ -344,7 +343,7 @@ export const wallet = Cli.create('wallet', {
       password: z
         .string()
         .optional()
-        .describe('Master password (or set ALMM_PASSWORD env var)'),
+        .describe('Master password (or set FOURMM_PASSWORD env var)'),
     }),
     examples: [
       {
@@ -372,12 +371,12 @@ export const wallet = Cli.create('wallet', {
       ),
     }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'No master password. Pass --password or set ALMM_PASSWORD env var.',
+            'No master password. Pass --password or set FOURMM_PASSWORD env var.',
         })
       }
 
@@ -442,8 +441,8 @@ export const wallet = Cli.create('wallet', {
             commands: [
               {
                 command: 'transfer out',
-                options: { from: 'treasury', toGroup: group.groupId, value: 0.1 },
-                description: 'Fund this group from the treasury',
+                options: { from: '<your-wallet-address>', toGroup: group.groupId, value: 0.1 },
+                description: 'Fund this group',
               },
               {
                 command: 'query balance',
@@ -457,7 +456,7 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet list-groups
+  // fourmm wallet list-groups
   // ============================================================
   .command('list-groups', {
     description: 'List all wallet groups in the in-house vault.',
@@ -465,7 +464,7 @@ export const wallet = Cli.create('wallet', {
       password: z
         .string()
         .optional()
-        .describe('Master password (or set ALMM_PASSWORD env var)'),
+        .describe('Master password (or set FOURMM_PASSWORD env var)'),
     }),
     examples: [{ description: 'List every wallet group' }],
     output: z.object({
@@ -482,12 +481,12 @@ export const wallet = Cli.create('wallet', {
       ),
     }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'No master password. Pass --password or set ALMM_PASSWORD env var.',
+            'No master password. Pass --password or set FOURMM_PASSWORD env var.',
         })
       }
 
@@ -508,18 +507,18 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet delete-group
+  // fourmm wallet delete-group
   // ============================================================
   .command('delete-group', {
     description: 'Delete an entire wallet group from the store.',
     options: z.object({
       id: z.coerce.number().int().positive().describe('Group ID to delete'),
       force: z.boolean().default(false).describe('Skip confirmation (required for non-interactive)'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
     output: z.object({ groupId: z.number(), message: z.string() }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const group = getGroup(password, c.options.id)
@@ -540,18 +539,18 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet remove
+  // fourmm wallet remove
   // ============================================================
   .command('remove', {
     description: 'Remove a single wallet from a group by address.',
     options: z.object({
       group: z.coerce.number().int().positive().describe('Group ID'),
       address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Expected 0x-prefixed address').describe('Wallet address to remove'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
     output: z.object({ groupId: z.number(), address: z.string(), message: z.string() }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const addr = getAddress(c.options.address) as Address
@@ -566,18 +565,18 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet import
+  // fourmm wallet import
   // ============================================================
   .command('import', {
     description: 'Import wallets from a CSV file (address,privateKey,note per line) into a group.',
     options: z.object({
       group: z.coerce.number().int().positive().describe('Target group ID'),
       file: z.string().describe('Path to CSV file'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
-    output: z.object({ groupId: z.number(), imported: z.number(), skipped: z.number(), message: z.string() }),
+    output: z.object({ groupId: z.number(), imported: z.number(), skipped: z.number(), skippedAddresses: z.array(z.string()), message: z.string() }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const group = getGroup(password, c.options.group)
@@ -592,44 +591,47 @@ export const wallet = Cli.create('wallet', {
 
       let imported = 0
       let skipped = 0
+      const skippedAddresses: string[] = []
 
       for (const line of lines) {
         // Skip header row
         if (line.toLowerCase().startsWith('address,')) continue
 
         const parts = line.split(',').map((p) => p.trim())
+        const address = parts[0] ?? ''
         const pk = parts[1]
         const note = parts[2] ?? ''
-        if (!pk || !pk.match(/^(0x)?[0-9a-fA-F]{64}$/)) { skipped++; continue }
+        if (!pk || !pk.match(/^(0x)?[0-9a-fA-F]{64}$/)) { skipped++; skippedAddresses.push(address || `line:${lines.indexOf(line) + 1}`); continue }
 
         const rawKey = pk.startsWith('0x') ? pk : `0x${pk}`
         try {
           addWalletFromPrivateKey(password, c.options.group, rawKey as Hex, note)
           imported++
         } catch {
-          skipped++ // duplicate or invalid
+          skipped++
+          skippedAddresses.push(address || `line:${lines.indexOf(line) + 1}`)
         }
       }
 
       return c.ok(
-        { groupId: c.options.group, imported, skipped, message: `Imported ${imported} wallets, skipped ${skipped}` },
+        { groupId: c.options.group, imported, skipped, skippedAddresses, message: `Imported ${imported} wallets, skipped ${skipped}${skippedAddresses.length > 0 ? ` (${skippedAddresses.join(', ')})` : ''}` },
         { cta: { commands: [{ command: 'wallet group-info', options: { id: c.options.group }, description: 'View updated group' }] } },
       )
     },
   })
   // ============================================================
-  // almm wallet export
+  // fourmm wallet export
   // ============================================================
   .command('export', {
     description: 'Export wallets from a group to a CSV file (address,privateKey,note).',
     options: z.object({
       group: z.coerce.number().int().positive().describe('Source group ID'),
       file: z.string().describe('Output CSV path'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
     output: z.object({ groupId: z.number(), count: z.number(), file: z.string(), decryptFailures: z.number(), message: z.string() }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const group = getGroup(password, c.options.group)
@@ -674,18 +676,18 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet export-group
+  // fourmm wallet export-group
   // ============================================================
   .command('export-group', {
     description: 'Export all groups as JSON, optionally AES encrypted.',
     options: z.object({
       file: z.string().describe('Output file path'),
       encrypt: z.boolean().default(false).describe('AES-encrypt the output with master password'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
     output: z.object({ groupCount: z.number(), encrypted: z.boolean(), file: z.string(), message: z.string() }),
     run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const store = loadStore(password)
@@ -713,14 +715,14 @@ export const wallet = Cli.create('wallet', {
     },
   })
   // ============================================================
-  // almm wallet overview
+  // fourmm wallet overview
   // ============================================================
   .command('overview', {
     description: 'Aggregate PnL across wallet groups from DataStore.',
     options: z.object({
       groups: z.string().describe('Comma-separated group IDs (e.g. "1,2")'),
       token: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional().describe('Filter by token CA'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
     }),
     output: z.object({
       groupIds: z.array(z.number()),
@@ -733,7 +735,7 @@ export const wallet = Cli.create('wallet', {
       })),
     }),
     async run(c) {
-      const password = resolveAlmmPassword(c.options.password)
+      const password = resolveFourmmPassword(c.options.password)
       if (!password) return c.error({ code: 'NO_PASSWORD', message: 'No master password.' })
 
       const groupIds = c.options.groups.split(',').map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0)

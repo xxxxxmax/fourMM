@@ -55,30 +55,41 @@ export async function authenticateFourmeme(
   const message = `You are sign in Meme ${nonce}`
   const signature = await account.signMessage({ message })
 
-  // Step 3: Login
+  // Step 3: Login (nested verifyInfo format per API docs 02-02-2026)
   const loginRes = await fetchFn(`${apiBase}/v1/private/user/login/dex`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      accountAddress: walletAddress,
-      verifyType: 'LOGIN',
-      networkCode: 'BSC',
-      signature,
+      region: 'WEB',
+      langType: 'EN',
+      loginIp: '',
+      inviteCode: '',
+      verifyInfo: {
+        address: walletAddress,
+        networkCode: 'BSC',
+        signature,
+        verifyType: 'LOGIN',
+      },
+      walletName: 'MetaMask',
     }),
   })
   if (!loginRes.ok) {
-    throw new Error(`Four.meme login/dex failed: HTTP ${loginRes.status}`)
+    const body = await loginRes.text().catch(() => '')
+    throw new Error(`Four.meme login/dex failed: HTTP ${loginRes.status} ${body}`)
   }
   const loginJson = (await loginRes.json()) as {
     code: number
-    data: { access_token?: string; accessToken?: string }
+    data: string | { access_token?: string; accessToken?: string }
   }
   if (loginJson.code !== 0) {
     throw new Error(`Four.meme login error: ${JSON.stringify(loginJson)}`)
   }
 
+  // API may return token as a plain string or as an object with access_token
   const accessToken =
-    loginJson.data.access_token ?? loginJson.data.accessToken ?? ''
+    typeof loginJson.data === 'string'
+      ? loginJson.data
+      : (loginJson.data.access_token ?? loginJson.data.accessToken ?? '')
   if (!accessToken) {
     throw new Error('Four.meme login succeeded but no access_token returned')
   }

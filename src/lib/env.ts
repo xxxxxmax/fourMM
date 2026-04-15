@@ -7,21 +7,13 @@
  *
  * Instead: commands accept an optional `--password` escape hatch (for local
  * scripting), fall back to env vars, and pass the resolved password as an
- * explicit function argument into the store / OWS layer.
+ * explicit function argument into the store layer.
  */
 
 /** Resolve the in-house wallet store master password from arg or env */
-export function resolveAlmmPassword(
+export function resolveFourmmPassword(
   explicit?: string | undefined,
 ): string | undefined {
   if (explicit) return explicit
-  return process.env.ALMM_PASSWORD || undefined
-}
-
-/** Resolve the OWS vault passphrase (or `ows_key_...` API token) */
-export function resolveOwsPassphrase(
-  explicit?: string | undefined,
-): string | undefined {
-  if (explicit) return explicit
-  return process.env.OWS_PASSPHRASE || undefined
+  return process.env.FOURMM_PASSWORD || undefined
 }

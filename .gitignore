@@ -23,4 +23,4 @@ contracts/cache
 contracts/broadcast
 
 # Local state
-.almm-test/
+.fourmm-test/

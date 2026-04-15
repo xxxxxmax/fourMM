@@ -37,7 +37,7 @@ type MockedReceipt = {
  */
 type TrackerClient = Pick<
   PublicClient,
-  'waitForTransactionReceipt' | 'getBlock' | 'getBalance'
+  'waitForTransactionReceipt' | 'getBlock' | 'getBalance' | 'readContract'
 >
 
 type MockOpts = {
@@ -47,6 +47,10 @@ type MockOpts = {
   receiptError?: Error
   /** Raw BNB balance (wei) that getBalance returns */
   bnbBalance?: bigint
+  /** Raw token balance (smallest units) returned for balanceOf */
+  tokenBalance?: bigint
+  /** Token decimals returned by decimals() */
+  tokenDecimals?: number
   /** Block timestamp (Unix seconds bigint) */
   blockTimestamp?: bigint
 }
@@ -62,6 +66,11 @@ function makeMockClient(opts: MockOpts): PublicClient {
       timestamp: opts.blockTimestamp ?? 1_700_000_000n,
     })) as TrackerClient['getBlock'],
     getBalance: (async () => opts.bnbBalance ?? 0n) as TrackerClient['getBalance'],
+    readContract: (async ({ functionName }) => {
+      if (functionName === 'balanceOf') return opts.tokenBalance ?? 0n
+      if (functionName === 'decimals') return BigInt(opts.tokenDecimals ?? 18)
+      throw new Error(`unexpected readContract(${String(functionName)})`)
+    }) as TrackerClient['readContract'],
   }
   // Single cast point — keeps the internal type narrow but lets call sites
   // pass the mock directly to trackTransaction(client, ...).
@@ -87,7 +96,7 @@ let tmpHome: string
 let realHome: string | undefined
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'almm-tracker-test-'))
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'fourmm-tracker-test-'))
   realHome = process.env.HOME
   process.env.HOME = tmpHome
   resetDataStore() // force a fresh singleton keyed to the new HOME
@@ -226,6 +235,7 @@ describe('trackTransaction — balance snapshot patch semantics', () => {
         effectiveGasPrice: 3_000_000_000n,
       },
       bnbBalance: 750_000_000_000_000_000n, // 0.75 BNB in wei
+      tokenBalance: 1_000_000n * 10n ** 18n,
     })
 
     await trackTransaction(client, TX_HASH, {
@@ -241,6 +251,36 @@ describe('trackTransaction — balance snapshot patch semantics', () => {
     const after = getDataStore().getBalances(CA_STANDARD, 1)?.balances[0]
     expect(after?.bnbBalance).toBe(0.75)
     expect(after?.tokenBalance).toBe(1_000_000)
+  })
+
+  it('creates a holdings row for confirmed token buys', async () => {
+    const client = makeMockClient({
+      receipt: {
+        status: 'success',
+        blockNumber: 201n,
+        gasUsed: 21_000n,
+        effectiveGasPrice: 3_000_000_000n,
+      },
+      bnbBalance: 500_000_000_000_000_000n,
+      tokenBalance: 1_000n * 10n ** 18n,
+      tokenDecimals: 18,
+    })
+
+    await trackTransaction(client, TX_HASH, {
+      ca: CA_STANDARD,
+      groupId: 1,
+      walletAddress: WALLET_A,
+      txType: 'buy',
+      knownAmountBnb: -0.01,
+    })
+
+    const holding = getDataStore().getHoldings(CA_STANDARD, 1)?.wallets[0]
+    expect(holding).toBeDefined()
+    expect(holding?.walletAddress).toBe(WALLET_A)
+    expect(holding?.tokenBalance).toBe(1000)
+    expect(holding?.totalBought).toBe(1000)
+    expect(holding?.totalCostBnb).toBe(0.01)
+    expect(holding?.avgBuyPrice).toBe(0.00001)
   })
 
   it('refreshes counterparty balance when provided', async () => {

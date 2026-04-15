@@ -1,5 +1,5 @@
 /**
- * On-chain constants for ALMM.
+ * On-chain constants for fourMM.
  *
  * These addresses are immutable and come from the Four.meme protocol
  * documentation (docs/API-Documents.03-03-2026.md) and public BSC infrastructure.
@@ -50,7 +50,7 @@ export const PANCAKE_V2_FACTORY: Address =
   '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73'
 
 // ============================================================
-// ALMM contracts
+// fourMM contracts
 // ============================================================
 
 /**
@@ -91,7 +91,7 @@ export type SupportedChainName = keyof typeof CHAINS
 // ============================================================
 
 /**
- * Sentinel "address" for native BNB in ALMM's DataStore and routing layers.
+ * Sentinel "address" for native BNB in fourMM's DataStore and routing layers.
  *
  * Important: BNB is the native currency of BSC and has no contract address.
  * We use the zero address as a convention. This matches:

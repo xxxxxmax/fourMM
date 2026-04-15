@@ -1,7 +1,7 @@
 /**
  * viem ABI binding for TokenManager2.
  *
- * Only the methods ALMM trade commands need: buyTokenAMAP, sellToken, createToken.
+ * Only the methods fourMM trade commands need: buyTokenAMAP, sellToken, createToken.
  * Address is resolved at runtime via Helper3.getTokenInfo().tokenManager.
  */
 

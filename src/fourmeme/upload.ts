@@ -51,7 +51,7 @@ export async function uploadTokenImage(
   const res = await fetchFn(`${apiBase}/v1/private/token/upload`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      'meme-web-access': accessToken,
     },
     body: formData,
   })

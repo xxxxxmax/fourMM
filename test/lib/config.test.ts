@@ -11,29 +11,29 @@ import {
 } from '../../src/lib/config.js'
 
 /**
- * These tests mutate ~/.almm. We redirect HOME to a tempdir for the duration
+ * These tests mutate ~/.fourmm. We redirect HOME to a tempdir for the duration
  * of each test so we never touch the real user config.
  */
 
 let tmpHome: string
 let realHome: string | undefined
-let realAlmmPassword: string | undefined
+let realFourmmPassword: string | undefined
 let realBscRpc: string | undefined
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'almm-config-test-'))
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'fourmm-config-test-'))
   realHome = process.env.HOME
-  realAlmmPassword = process.env.ALMM_PASSWORD
+  realFourmmPassword = process.env.FOURMM_PASSWORD
   realBscRpc = process.env.BSC_RPC_URL
   process.env.HOME = tmpHome
-  delete process.env.ALMM_PASSWORD
+  delete process.env.FOURMM_PASSWORD
   delete process.env.BSC_RPC_URL
 })
 
 afterEach(() => {
   process.env.HOME = realHome
-  if (realAlmmPassword !== undefined)
-    process.env.ALMM_PASSWORD = realAlmmPassword
+  if (realFourmmPassword !== undefined)
+    process.env.FOURMM_PASSWORD = realFourmmPassword
   if (realBscRpc !== undefined) process.env.BSC_RPC_URL = realBscRpc
   fs.rmSync(tmpHome, { recursive: true, force: true })
 })
@@ -62,9 +62,9 @@ describe('config.loadConfig', () => {
   })
 
   it('falls back to defaults on corrupt JSON', () => {
-    const almmDir = path.join(tmpHome, '.almm')
-    fs.mkdirSync(almmDir, { recursive: true })
-    fs.writeFileSync(path.join(almmDir, 'config.json'), 'not json{')
+    const fourmDir = path.join(tmpHome, '.fourmm')
+    fs.mkdirSync(fourmDir, { recursive: true })
+    fs.writeFileSync(path.join(fourmDir, 'config.json'), 'not json{')
     const config = loadConfig()
     expect(config.defaultSlippageBps).toBe(300)
   })
@@ -78,15 +78,15 @@ describe('config.initConfig', () => {
     })
     expect(config.rpcUrl).toBe('https://foo/')
     expect(config.network).toBe('bsc-testnet')
-    const path1 = path.join(tmpHome, '.almm', 'config.json')
+    const path1 = path.join(tmpHome, '.fourmm', 'config.json')
     expect(fs.existsSync(path1)).toBe(true)
     const raw = JSON.parse(fs.readFileSync(path1, 'utf-8'))
     expect(raw.rpcUrl).toBe('https://foo/')
   })
 
-  it('creates ~/.almm subdirs with 0700 mode', () => {
+  it('creates ~/.fourmm subdirs with 0700 mode', () => {
     initConfig({})
-    const stat = fs.statSync(path.join(tmpHome, '.almm', 'wallets'))
+    const stat = fs.statSync(path.join(tmpHome, '.fourmm', 'wallets'))
     expect(stat.isDirectory()).toBe(true)
     // On Linux, we set mode 0o700 explicitly
     expect(stat.mode & 0o777).toBe(0o700)
@@ -135,7 +135,7 @@ describe('config.saveConfig', () => {
   it('writes the config file with mode 0600', () => {
     const base = loadConfig()
     saveConfig(base)
-    const file = path.join(tmpHome, '.almm', 'config.json')
+    const file = path.join(tmpHome, '.fourmm', 'config.json')
     const stat = fs.statSync(file)
     expect(stat.mode & 0o777).toBe(0o600)
   })

@@ -1,6 +1,6 @@
 /**
  * One-off: find the most recent Four.meme token via TokenManager2.TokenCreate event.
- * Used during Week 1 to pick a real CA for `almm token info` verification.
+ * Used during Week 1 to pick a real CA for `fourmm token info` verification.
  *
  * Run: pnpm tsx scripts/find-recent-token.mts
  */

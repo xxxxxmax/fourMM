@@ -27,10 +27,10 @@ export function makeWalletClient(
   const chain = config.network === 'bsc-testnet' ? bscTestnet : bsc
   const transports = [config.rpcUrl, ...config.fallbackRpcUrls]
     .filter((url): url is string => Boolean(url))
-    .map((url) => http(url, { timeout: 15_000 }))
+    .map((url) => http(url, { timeout: 8_000 }))
   return createWalletClient({
     account,
     chain,
-    transport: fallback(transports, { rank: false }),
+    transport: fallback(transports, { rank: true }),
   })
 }

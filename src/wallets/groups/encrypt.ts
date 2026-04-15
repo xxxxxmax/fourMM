@@ -6,12 +6,11 @@
  *   2. `CryptoJS.AES.encrypt(text, passphrase)` bakes salt + IV into the
  *      ciphertext output, so we don't have to manage those ourselves
  *
- * OWS-managed treasury keys live under ~/.ows (Rust NAPI, harder crypto).
  * These in-house keys are short-lived sniper/volume wallets; the threat
  * model is "local disk + master password, encrypted at rest".
  *
  * Note: this format is NOT wire-compatible with ForgeX. The password-check
- * marker is "ALMM_PASSWORD_OK" (ForgeX used "FORGEX_PASSWORD_OK").
+ * marker is "ALMM_PASSWORD_OK" (kept for backward compat; ForgeX used "FORGEX_PASSWORD_OK").
  */
 
 import CryptoJS from 'crypto-js'

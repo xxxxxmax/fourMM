@@ -17,11 +17,62 @@ export type CreateTokenParams = {
   twitter?: string | undefined
   website?: string | undefined
   telegram?: string | undefined
+  /** BNB amount for preset dev-buy (creator buys at launch). "0" to skip. */
+  preSale?: string | undefined
 }
 
 export type CreateTokenResult = {
   createArg: string
   signature: string
+}
+
+/**
+ * Fetch the platform's raisedToken config for BSC/BNB.
+ * This gives us the fixed params (b0Amount, totalBAmount, tradeLevel, etc.)
+ * that must be included in the create request.
+ */
+async function fetchRaisedTokenConfig(
+  apiBase: string,
+  fetchFn: typeof fetch,
+): Promise<Record<string, unknown>> {
+  try {
+    const res = await fetchFn(`${apiBase}/v1/public/config`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (res.ok) {
+      const json = (await res.json()) as { code: number; data: unknown }
+      if (json.code === 0 && json.data) {
+        // data is an array of raisedToken configs
+        if (Array.isArray(json.data)) {
+          const bnb = json.data.find((t: any) => t.symbol === 'BNB' && t.networkCode === 'BSC')
+          if (bnb) return bnb
+        }
+      }
+    }
+  } catch { /* use hardcoded defaults */ }
+
+  // Hardcoded defaults from API docs (02-02-2026)
+  return {
+    symbol: 'BNB',
+    nativeSymbol: 'BNB',
+    symbolAddress: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+    deployCost: '0',
+    buyFee: '0.01',
+    sellFee: '0.01',
+    minTradeFee: '0',
+    b0Amount: '8',
+    totalBAmount: '18',
+    totalAmount: '1000000000',
+    logoUrl: 'https://static.four.meme/market/68b871b6-96f7-408c-b8d0-388d804b34275092658264263839640.png',
+    tradeLevel: ['0.1', '0.5', '1'],
+    status: 'PUBLISH',
+    buyTokenLink: 'https://pancakeswap.finance/swap',
+    reservedNumber: 10,
+    saleRate: '0.8',
+    networkCode: 'BSC',
+    platform: 'MEME',
+  }
 }
 
 /**
@@ -37,36 +88,45 @@ export async function createTokenOnApi(
   const config = loadConfig()
   const apiBase = config.fourmemeApiUrl
 
+  const raisedToken = await fetchRaisedTokenConfig(apiBase, fetchFn)
+
   const body = {
-    tokenName: params.name,
-    tokenSymbol: params.symbol,
-    description: params.description,
-    image: params.imageUrl,
-    launchTime: params.launchTime ?? Math.floor(Date.now() / 1000),
+    name: params.name,
+    shortName: params.symbol,
+    symbol: 'BNB',
+    desc: params.description,
+    imgUrl: params.imageUrl,
+    launchTime: params.launchTime ?? Date.now(),
     label: params.category ?? 'Meme',
-    twitterUrl: params.twitter ?? '',
-    websiteUrl: params.website ?? '',
-    telegramUrl: params.telegram ?? '',
-    // Fixed Four.meme params
-    totalSupply: '1000000000',
-    raisedAmount: '24',
-    saleRatio: '80',
-    tradingFee: '0.0025',
-    // BNB as quote
-    raisedToken: 'BNB',
+    lpTradingFee: 0.0025,
+    ...(params.website ? { webUrl: params.website } : {}),
+    ...(params.twitter ? { twitterUrl: params.twitter } : {}),
+    ...(params.telegram ? { telegramUrl: params.telegram } : {}),
+    preSale: params.preSale ?? '0',
+    onlyMPC: false,
+    feePlan: false,
+    // Fixed platform parameters
+    totalSupply: 1000000000,
+    raisedAmount: 18,
+    saleRate: 0.8,
+    reserveRate: 0,
+    funGroup: false,
+    clickFun: false,
+    raisedToken,
   }
 
   const res = await fetchFn(`${apiBase}/v1/private/token/create`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+      'meme-web-access': accessToken,
     },
     body: JSON.stringify(body),
   })
 
   if (!res.ok) {
-    throw new Error(`Four.meme token/create failed: HTTP ${res.status}`)
+    const text = await res.text().catch(() => '')
+    throw new Error(`Four.meme token/create failed: HTTP ${res.status} ${text}`)
   }
 
   const json = (await res.json()) as {

@@ -19,9 +19,11 @@
  */
 
 import type { Address, Hash, PublicClient } from 'viem'
-import { formatEther } from 'viem'
+import { formatEther, formatUnits } from 'viem'
+import { erc20Abi } from '../contracts/erc20.js'
 import { getDataStore } from '../datastore/index.js'
-import type { TxType } from '../datastore/types.js'
+import type { TxType, WalletHolding } from '../datastore/types.js'
+import { NATIVE_BNB } from './const.js'
 
 // ============================================================
 // Types
@@ -59,15 +61,19 @@ export type TrackingResult = {
 /**
  * Await a transaction, record it, refresh balances.
  * Always resolves — never throws.
+ *
+ * If `preReceipt` is provided the receipt wait is skipped entirely — use this
+ * when the caller already awaited the receipt (e.g. sequential buy loop).
  */
 export async function trackTransaction(
   client: PublicClient,
   txHash: Hash,
   context: TrackContext,
-  timeoutMs = 90_000,
+  timeoutMs = 30_000,
+  preReceipt?: { status: string; blockNumber: bigint; gasUsed: bigint; effectiveGasPrice: bigint } | undefined,
 ): Promise<TrackingResult> {
   try {
-    const receipt = await client.waitForTransactionReceipt({
+    const receipt = preReceipt ?? await client.waitForTransactionReceipt({
       hash: txHash,
       timeout: timeoutMs,
     })
@@ -109,6 +115,14 @@ export async function trackTransaction(
         context.groupId,
         context.walletAddress,
       ).catch(() => {})
+      await refreshTokenPositionSnapshot(
+        client,
+        context.ca,
+        context.groupId,
+        context.walletAddress,
+        context.txType,
+        context.knownAmountBnb,
+      ).catch(() => {})
       if (context.counterparty) {
         await refreshBalanceSnapshot(
           client,
@@ -139,11 +153,16 @@ export function trackInBackground(
   client: PublicClient,
   txHash: Hash,
   context: TrackContext,
-  timeoutMs = 90_000,
+  timeoutMs = 30_000,
+  preReceipt?: { status: string; blockNumber: bigint; gasUsed: bigint; effectiveGasPrice: bigint } | undefined,
 ): void {
-  trackTransaction(client, txHash, context, timeoutMs).catch(() => {
-    /* never throw */
-  })
+  // Use unref'd setTimeout so the pending promise doesn't prevent Node.js exit.
+  // The CLI can return tx hashes immediately; tracking happens if the process
+  // stays alive long enough, but never blocks exit.
+  const t = setTimeout(() => {
+    trackTransaction(client, txHash, context, timeoutMs, preReceipt).catch(() => {})
+  }, 0)
+  if (typeof t.unref === 'function') t.unref()
 }
 
 // ============================================================
@@ -167,4 +186,66 @@ async function refreshBalanceSnapshot(
   const bnb = Number(formatEther(bnbWei))
   const ds = getDataStore()
   ds.updateBalance(ca, groupId, wallet, { bnbBalance: bnb })
+}
+
+async function refreshTokenPositionSnapshot(
+  client: PublicClient,
+  ca: Address,
+  groupId: number,
+  wallet: Address,
+  txType: TxType,
+  knownAmountBnb?: number,
+): Promise<void> {
+  if (ca === NATIVE_BNB) return
+
+  const [rawTokenBalance, decimalsRaw] = await Promise.all([
+    client.readContract({
+      address: ca,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [wallet],
+    }),
+    client.readContract({
+      address: ca,
+      abi: erc20Abi,
+      functionName: 'decimals',
+    }),
+  ])
+
+  const decimals = Number(decimalsRaw)
+  const tokenBalance = Number(formatUnits(rawTokenBalance, decimals))
+
+  const ds = getDataStore()
+  ds.updateBalance(ca, groupId, wallet, { tokenBalance })
+
+  const currentHolding =
+    ds.getHoldings(ca, groupId)?.wallets.find(
+      (row) => row.walletAddress === wallet,
+    ) ?? null
+  const previousTokenBalance = currentHolding?.tokenBalance ?? 0
+  const patch: Partial<WalletHolding> = { tokenBalance }
+
+  if (
+    txType === 'buy' &&
+    typeof knownAmountBnb === 'number' &&
+    knownAmountBnb < 0 &&
+    tokenBalance > previousTokenBalance
+  ) {
+    const amountBought = tokenBalance - previousTokenBalance
+    const totalBought = (currentHolding?.totalBought ?? 0) + amountBought
+    const totalCostBnb =
+      (currentHolding?.totalCostBnb ?? 0) + Math.abs(knownAmountBnb)
+
+    patch.totalBought = totalBought
+    patch.totalCostBnb = totalCostBnb
+    patch.avgBuyPrice = totalBought > 0 ? totalCostBnb / totalBought : 0
+  }
+
+  if (txType === 'sell' && previousTokenBalance > tokenBalance) {
+    patch.totalSold =
+      (currentHolding?.totalSold ?? 0) +
+      (previousTokenBalance - tokenBalance)
+  }
+
+  ds.updateHolding(ca, groupId, wallet, patch)
 }

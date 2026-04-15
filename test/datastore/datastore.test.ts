@@ -28,7 +28,7 @@ let tmpHome: string
 let realHome: string | undefined
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'almm-datastore-'))
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'fourmm-datastore-'))
   realHome = process.env.HOME
   process.env.HOME = tmpHome
 })

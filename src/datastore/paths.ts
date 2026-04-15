@@ -2,7 +2,7 @@
  * DataStore path construction.
  *
  * All functions are lazy (read HOME on each call) so tests can redirect
- * without resetting modules. Lives under ~/.almm/data/.
+ * without resetting modules. Lives under ~/.fourmm/data/.
  */
 
 import path from 'node:path'

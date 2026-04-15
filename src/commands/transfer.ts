@@ -1,10 +1,9 @@
 /**
- * `almm transfer` command group — fund flow between treasury and wallet groups.
+ * `fourmm transfer` command group — fund flow between wallet groups.
  *
  * Week 2 scope: `transfer out` and `transfer in`.
  *
- * Signing routes:
- *   --from treasury              → OWS (policy-gated) signing
+ * Signing route:
  *   --from <in-house address>    → in-house wallet store signing
  *                                  (address must live in some wallet group)
  *
@@ -15,36 +14,27 @@
 
 import { Cli, z } from 'incur'
 import {
-  createWalletClient,
-  fallback,
   formatEther,
   getAddress,
-  http,
   isAddress,
   parseEther,
   type Address,
   type Hash,
-  type PublicClient,
   type WalletClient,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { bsc, bscTestnet } from 'viem/chains'
-import { loadConfig, type CliConfig } from '../lib/config.js'
+import { loadConfig } from '../lib/config.js'
 import { NATIVE_BNB } from '../lib/const.js'
-import { resolveAlmmPassword, resolveOwsPassphrase } from '../lib/env.js'
+import { resolveFourmmPassword } from '../lib/env.js'
 import { trackInBackground } from '../lib/tracker.js'
 import { getPublicClient } from '../lib/viem.js'
-import type { WalletRow, WalletResult } from '../lib/wallet-rows.js'
+import type { WalletRow } from '../lib/wallet-rows.js'
 import {
   decryptPrivateKey,
   getGroup,
   listGroups,
   type WalletGroup,
 } from '../wallets/groups/store.js'
-import {
-  BSC_CHAIN_ID,
-  treasuryToViemAccount,
-} from '../wallets/treasury.js'
 
 // ============================================================
 // Helpers
@@ -76,11 +66,11 @@ function findGroupForAddress(
 }
 
 // ============================================================
-// Sub-command: transfer out (treasury / wallet → group)
+// Sub-command: transfer out (wallet → group)
 // ============================================================
 
 export const transfer = Cli.create('transfer', {
-  description: 'Fund flow: treasury ↔ wallet groups and group ↔ group',
+  description: 'Fund flow: wallet groups and group ↔ group',
 })
   .command('out', {
     description:
@@ -88,7 +78,7 @@ export const transfer = Cli.create('transfer', {
     options: z.object({
       from: z
         .string()
-        .describe('Source wallet: "treasury" (OWS) or an in-house wallet address'),
+        .describe('Source in-house wallet address'),
       toGroup: z
         .coerce.number()
         .int()
@@ -101,11 +91,7 @@ export const transfer = Cli.create('transfer', {
       password: z
         .string()
         .optional()
-        .describe('In-house master password (or ALMM_PASSWORD env)'),
-      owsPassphrase: z
-        .string()
-        .optional()
-        .describe('OWS vault passphrase / ows_key_... (or OWS_PASSPHRASE env)'),
+        .describe('In-house master password (or FOURMM_PASSWORD env)'),
       dryRun: z
         .boolean()
         .default(false)
@@ -113,11 +99,11 @@ export const transfer = Cli.create('transfer', {
     }),
     examples: [
       {
-        options: { from: 'treasury', toGroup: 1, value: 0.1, dryRun: true },
+        options: { from: '0xYourWalletAddress', toGroup: 1, value: 0.1, dryRun: true },
         description: 'Dry-run: send 0.1 BNB to every wallet in group 1',
       },
       {
-        options: { from: 'treasury', toGroup: 1, value: 0.05 },
+        options: { from: '0xYourWalletAddress', toGroup: 1, value: 0.05 },
         description: 'Live: distribute 0.05 BNB to every wallet in group 1',
       },
     ],
@@ -140,21 +126,21 @@ export const transfer = Cli.create('transfer', {
     }),
     async run(c) {
       // Load config once; pass through to walletClientFor and the treasury
-      // branch so we don't re-read ~/.almm/config.json multiple times.
+      // branch so we don't re-read ~/.fourmm/config.json multiple times.
       const config = loadConfig()
       const publicClient = getPublicClient()
 
       // ---- Resolve master passwords ----
-      const almmPassword = resolveAlmmPassword(c.options.password)
-      if (!almmPassword) {
+      const fourmmPassword = resolveFourmmPassword(c.options.password)
+      if (!fourmmPassword) {
         return c.error({
           code: 'NO_PASSWORD',
-          message: 'ALMM master password required (--password or ALMM_PASSWORD env)',
+          message: 'fourMM master password required (--password or FOURMM_PASSWORD env)',
         })
       }
 
       // ---- Resolve target group ----
-      const targetGroup = getGroup(almmPassword, c.options.toGroup)
+      const targetGroup = getGroup(fourmmPassword, c.options.toGroup)
       if (!targetGroup) {
         return c.error({
           code: 'GROUP_NOT_FOUND',
@@ -169,70 +155,36 @@ export const transfer = Cli.create('transfer', {
       }
 
       // ---- Resolve signer ----
-      const isTreasury = c.options.from.toLowerCase() === 'treasury'
       let signerAddress: Address
       let walletClient: WalletClient
 
-      if (isTreasury) {
-        const owsPassphrase = resolveOwsPassphrase(c.options.owsPassphrase)
-        if (!owsPassphrase) {
-          return c.error({
-            code: 'NO_OWS_PASSPHRASE',
-            message:
-              'Treasury signing requires OWS passphrase (--ows-passphrase or OWS_PASSPHRASE env)',
-          })
-        }
-        try {
-          const account = treasuryToViemAccount({
-            wallet: config.treasuryWallet,
-            passphrase: owsPassphrase,
-            chainId: BSC_CHAIN_ID,
-          })
-          signerAddress = account.address
-          const chain = config.network === 'bsc-testnet' ? bscTestnet : bsc
-          const transports = [config.rpcUrl, ...config.fallbackRpcUrls]
-            .filter((url): url is string => Boolean(url))
-            .map((url) => http(url, { timeout: 15_000 }))
-          walletClient = createWalletClient({
-            account,
-            chain,
-            transport: fallback(transports, { rank: false }),
-          })
-        } catch (err) {
-          return c.error({
-            code: 'TREASURY_ADAPTER_FAILED',
-            message: err instanceof Error ? err.message : String(err),
-          })
-        }
-      } else {
-        if (!isAddress(c.options.from)) {
-          return c.error({
-            code: 'INVALID_ADDRESS',
-            message: `"${c.options.from}" is not "treasury" nor a valid address`,
-          })
-        }
-        const fromAddress = getAddress(c.options.from) as Address
-        const match = findGroupForAddress(almmPassword, fromAddress)
-        if (!match) {
-          return c.error({
-            code: 'FROM_NOT_FOUND',
-            message: `Address ${fromAddress} is not in any in-house wallet group`,
-          })
-        }
-        const stored = match.group.wallets[match.walletIndex]!
-        let privateKey
-        try {
-          privateKey = decryptPrivateKey(stored, almmPassword)
-        } catch (err) {
-          return c.error({
-            code: 'DECRYPT_FAILED',
-            message: err instanceof Error ? err.message : String(err),
-          })
-        }
-        const account = privateKeyToAccount(privateKey)
-        signerAddress = account.address
-        walletClient = makeWalletClient(account, config)
+      if (!isAddress(c.options.from)) {
+        return c.error({
+          code: 'INVALID_ADDRESS',
+          message: `"${c.options.from}" is not a valid address`,
+        })
       }
+      const fromAddress = getAddress(c.options.from) as Address
+      const match = findGroupForAddress(fourmmPassword, fromAddress)
+      if (!match) {
+        return c.error({
+          code: 'FROM_NOT_FOUND',
+          message: `Address ${fromAddress} is not in any in-house wallet group`,
+        })
+      }
+      const stored = match.group.wallets[match.walletIndex]!
+      let privateKey
+      try {
+        privateKey = decryptPrivateKey(stored, fourmmPassword)
+      } catch (err) {
+        return c.error({
+          code: 'DECRYPT_FAILED',
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
+      const account = privateKeyToAccount(privateKey)
+      signerAddress = account.address
+      walletClient = makeWalletClient(account, config)
 
       // ---- Pre-flight checks: sender balance, estimated cost ----
       const perWalletWei = parseEther(c.options.value.toString())
@@ -418,7 +370,7 @@ export const transfer = Cli.create('transfer', {
       password: z
         .string()
         .optional()
-        .describe('In-house master password (or ALMM_PASSWORD env)'),
+        .describe('In-house master password (or FOURMM_PASSWORD env)'),
       dryRun: z
         .boolean()
         .default(false)
@@ -470,17 +422,17 @@ export const transfer = Cli.create('transfer', {
 
       const toAddress = getAddress(c.options.to) as Address
 
-      const almmPassword = resolveAlmmPassword(c.options.password)
-      if (!almmPassword) {
+      const fourmmPassword = resolveFourmmPassword(c.options.password)
+      if (!fourmmPassword) {
         return c.error({
           code: 'NO_PASSWORD',
           message:
-            'ALMM master password required (--password or ALMM_PASSWORD env)',
+            'fourMM master password required (--password or FOURMM_PASSWORD env)',
         })
       }
 
       // ---- Load source group ----
-      const group = getGroup(almmPassword, c.options.fromGroup)
+      const group = getGroup(fourmmPassword, c.options.fromGroup)
       if (!group) {
         return c.error({
           code: 'GROUP_NOT_FOUND',
@@ -509,20 +461,29 @@ export const transfer = Cli.create('transfer', {
       // the same dry-run planning shape.
       const rows: WalletRow[] = []
 
+      let rpcReadFailures = 0
+      const rpcFailedAddresses: string[] = []
       for (const w of group.wallets) {
         let balanceBnb = 0
+        let rpcFailed = false
         try {
           const wei = await publicClient.getBalance({ address: w.address })
           balanceBnb = Number(formatEther(wei))
         } catch {
           balanceBnb = 0
+          rpcFailed = true
+          rpcReadFailures++
+          rpcFailedAddresses.push(w.address)
         }
 
         let sendBnb = 0
         let insufficient = false
         // Minimum send threshold: skip if sendBnb would be less than gas cost
         const minSendThreshold = feePerTxBnb * 2
-        if (c.options.amount === 'all') {
+        if (rpcFailed) {
+          // Can't compute — skip this wallet
+          sendBnb = 0
+        } else if (c.options.amount === 'all') {
           sendBnb = Math.max(0, balanceBnb - bufferBnb - feePerTxBnb)
           if (sendBnb < minSendThreshold) sendBnb = 0 // dust: not worth the gas
         } else if (c.options.amount === 'reserve') {
@@ -543,6 +504,13 @@ export const transfer = Cli.create('transfer', {
         rows.push({ wallet: w, balanceBnb, sendBnb, insufficient })
       }
 
+      if (rpcReadFailures > 0 && rpcReadFailures === group.wallets.length) {
+        return c.error({
+          code: 'RPC_READ_FAILED',
+          message: `Failed to read balance for all ${rpcReadFailures} wallets — RPC may be down`,
+        })
+      }
+
       const totalBnb = rows.reduce((sum, r) => sum + r.sendBnb, 0)
       const estimatedFeeTotalBnb = feePerTxBnb * rows.length
 
@@ -560,11 +528,13 @@ export const transfer = Cli.create('transfer', {
             results: rows.map((r) => ({
               from: r.wallet.address,
               sendBnb: `${r.sendBnb.toFixed(6)} BNB`,
-              status: r.insufficient
-                ? 'insufficient-funds'
-                : r.sendBnb > 0
-                  ? 'ready'
-                  : 'nothing-to-send',
+              status: rpcFailedAddresses.includes(r.wallet.address)
+                ? 'rpc-read-failed'
+                : r.insufficient
+                  ? 'insufficient-funds'
+                  : r.sendBnb > 0
+                    ? 'ready'
+                    : 'nothing-to-send',
             })),
           },
           {
@@ -617,7 +587,7 @@ export const transfer = Cli.create('transfer', {
 
         let privateKey
         try {
-          privateKey = decryptPrivateKey(row.wallet, almmPassword)
+          privateKey = decryptPrivateKey(row.wallet, fourmmPassword)
         } catch (err) {
           results.push({
             from: row.wallet.address,
@@ -702,7 +672,7 @@ export const transfer = Cli.create('transfer', {
       amount: z.enum(['all', 'reserve', 'fixed']).default('all')
         .describe('all = send (balance - gas - buffer); reserve = keep --value BNB; fixed = send exactly --value BNB'),
       value: z.coerce.number().min(0).optional().describe('BNB amount (required for reserve/fixed)'),
-      password: z.string().optional().describe('Master password (or ALMM_PASSWORD env)'),
+      password: z.string().optional().describe('Master password (or FOURMM_PASSWORD env)'),
       dryRun: z.boolean().default(false).describe('Estimate without broadcasting'),
     }),
     output: z.object({
@@ -731,16 +701,16 @@ export const transfer = Cli.create('transfer', {
 
       const config = loadConfig()
       const publicClient = getPublicClient()
-      const almmPassword = resolveAlmmPassword(c.options.password)
-      if (!almmPassword) {
-        return c.error({ code: 'NO_PASSWORD', message: 'ALMM master password required (--password or ALMM_PASSWORD env)' })
+      const fourmmPassword = resolveFourmmPassword(c.options.password)
+      if (!fourmmPassword) {
+        return c.error({ code: 'NO_PASSWORD', message: 'fourMM master password required (--password or FOURMM_PASSWORD env)' })
       }
 
-      const srcGroup = getGroup(almmPassword, c.options.fromGroup)
+      const srcGroup = getGroup(fourmmPassword, c.options.fromGroup)
       if (!srcGroup || srcGroup.wallets.length === 0) {
         return c.error({ code: 'FROM_GROUP_NOT_FOUND', message: `Source group ${c.options.fromGroup} not found or empty` })
       }
-      const dstGroup = getGroup(almmPassword, c.options.toGroup)
+      const dstGroup = getGroup(fourmmPassword, c.options.toGroup)
       if (!dstGroup || dstGroup.wallets.length === 0) {
         return c.error({ code: 'TO_GROUP_NOT_FOUND', message: `Target group ${c.options.toGroup} not found or empty` })
       }
@@ -757,11 +727,12 @@ export const transfer = Cli.create('transfer', {
       type PairRow = { fromWallet: (typeof srcGroup.wallets)[number]; toWallet: (typeof dstGroup.wallets)[number]; balanceBnb: number; sendBnb: number; insufficient: boolean }
       const rows: PairRow[] = []
 
+      let rpcReadFailures = 0
       for (let i = 0; i < pairCount; i++) {
         const fromW = srcGroup.wallets[i]!
         const toW = dstGroup.wallets[i]!
         let balanceBnb = 0
-        try { const wei = await publicClient.getBalance({ address: fromW.address }); balanceBnb = Number(formatEther(wei)) } catch { /* 0 */ }
+        try { const wei = await publicClient.getBalance({ address: fromW.address }); balanceBnb = Number(formatEther(wei)) } catch { balanceBnb = 0; rpcReadFailures++ }
 
         let sendBnb = 0
         let insufficient = false
@@ -773,6 +744,13 @@ export const transfer = Cli.create('transfer', {
           if (balanceBnb < c.options.value! + feePerTxBnb) { insufficient = true } else { sendBnb = c.options.value! }
         }
         rows.push({ fromWallet: fromW, toWallet: toW, balanceBnb, sendBnb, insufficient })
+      }
+
+      if (rpcReadFailures > 0 && rpcReadFailures === pairCount) {
+        return c.error({
+          code: 'RPC_READ_FAILED',
+          message: `Failed to read balance for all ${rpcReadFailures} wallets — RPC may be down`,
+        })
       }
 
       const totalBnb = rows.reduce((s, r) => s + r.sendBnb, 0)
@@ -801,7 +779,7 @@ export const transfer = Cli.create('transfer', {
         if (row.sendBnb <= 0) { results.push({ from: row.fromWallet.address, to: row.toWallet.address, sendBnb: '0 BNB', status: 'skipped' }); continue }
 
         let privateKey
-        try { privateKey = decryptPrivateKey(row.fromWallet, almmPassword) } catch (err) {
+        try { privateKey = decryptPrivateKey(row.fromWallet, fourmmPassword) } catch (err) {
           results.push({ from: row.fromWallet.address, to: row.toWallet.address, sendBnb: `${row.sendBnb.toFixed(6)} BNB`, status: 'decrypt-failed', error: err instanceof Error ? err.message : String(err) })
           continue
         }

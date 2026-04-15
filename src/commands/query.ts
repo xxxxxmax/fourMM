@@ -1,5 +1,5 @@
 /**
- * `almm query` command group — read-only data queries.
+ * `fourmm query` command group — read-only data queries.
  *
  * Week 2 scope: balance, price.
  * Week 2 later: kline, transactions, monitor (deferred).
@@ -16,6 +16,7 @@ import {
 import { erc20Abi } from '../contracts/erc20.js'
 import { loadConfig } from '../lib/config.js'
 import { getDataStore } from '../datastore/index.js'
+import { NATIVE_BNB } from '../lib/const.js'
 import { getTokenPrice } from '../lib/pricing.js'
 import { getPublicClient } from '../lib/viem.js'
 
@@ -23,7 +24,7 @@ export const query = Cli.create('query', {
   description: 'Read-only data queries (balance, price, etc.)',
 })
   // ============================================================
-  // almm query balance
+  // fourmm query balance
   // ============================================================
   .command('balance', {
     description:
@@ -135,7 +136,7 @@ export const query = Cli.create('query', {
     },
   })
   // ============================================================
-  // almm query price
+  // fourmm query price
   // ============================================================
   .command('price', {
     description:
@@ -210,7 +211,7 @@ export const query = Cli.create('query', {
     },
   })
   // ============================================================
-  // almm query transactions
+  // fourmm query transactions
   // ============================================================
   .command('transactions', {
     description: 'Show local transaction history for a wallet group (from DataStore).',
@@ -241,12 +242,18 @@ export const query = Cli.create('query', {
         if (!file) continue
         for (const t of file.transactions) allTxs.push({ txHash: t.txHash, txType: t.txType, wallet: t.walletAddress, token: ca, amountBnb: t.amountBnb, amountToken: t.amountToken, status: t.status, blockTime: t.blockTime })
       }
+      const nativeFile = ds.getTransactions(NATIVE_BNB, c.options.group)
+      if (nativeFile) {
+        for (const t of nativeFile.transactions) {
+          allTxs.push({ txHash: t.txHash, txType: t.txType, wallet: t.walletAddress, token: NATIVE_BNB, amountBnb: t.amountBnb, amountToken: t.amountToken, status: t.status, blockTime: t.blockTime })
+        }
+      }
       allTxs.sort((a, b) => b.blockTime - a.blockTime)
       return c.ok({ group: c.options.group, count: Math.min(allTxs.length, c.options.limit), transactions: allTxs.slice(0, c.options.limit) })
     },
   })
   // ============================================================
-  // almm query monitor
+  // fourmm query monitor
   // ============================================================
   .command('monitor', {
     description: 'Show holdings + real-time PnL for a wallet group on a specific token.',
@@ -286,7 +293,7 @@ export const query = Cli.create('query', {
     },
   })
   // ============================================================
-  // almm query kline
+  // fourmm query kline
   // ============================================================
   .command('kline', {
     description: 'Fetch OHLCV candle data from GeckoTerminal for a graduated token.',

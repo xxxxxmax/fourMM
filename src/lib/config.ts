@@ -1,7 +1,7 @@
 /**
- * ALMM configuration management.
+ * fourMM configuration management.
  *
- * Stored at ~/.almm/config.json. Supports env var overrides for RPC and
+ * Stored at ~/.fourmm/config.json. Supports env var overrides for RPC and
  * sensitive values (so users don't have to write secrets to disk).
  *
  * Precedence: env var > config file > default.
@@ -36,8 +36,6 @@ export type CliConfig = {
   defaultPriorityFeeGwei: number
   /** Output format default */
   outputFormat: 'toon' | 'json' | 'yaml' | 'md' | 'jsonl'
-  /** Name of the OWS treasury wallet used by `ows` / `token create` / `transfer` */
-  treasuryWallet: string
   /** BSCScan API key (optional, for verification workflows) */
   bscscanApiKey: string
   /** GeckoTerminal base URL (override for rate limit bypass) */
@@ -54,19 +52,15 @@ const DEFAULT_CONFIG: CliConfig = {
   // bsc.publicnode.com tends to be faster and more stable than Binance's own
   // hosted nodes during our Week-1 testing. Users can override via config or
   // BSC_RPC_URL env var.
-  rpcUrl: 'https://bsc.publicnode.com',
+  rpcUrl: 'https://meme.bsc.blockrazor.xyz',
   fallbackRpcUrls: [
-    'https://rpc.ankr.com/bsc',
-    'https://bsc-dataseed1.defibit.io/',
-    'https://bsc-dataseed1.ninicoin.io/',
-    'https://bsc-dataseed.binance.org/',
+    'https://bsc.publicnode.com',
   ],
   network: 'bsc',
   defaultSlippageBps: 300,
   gasPriceMultiplier: 1.1,
   defaultPriorityFeeGwei: 1,
   outputFormat: 'toon',
-  treasuryWallet: 'treasury',
   bscscanApiKey: '',
   geckoTerminalUrl: 'https://api.geckoterminal.com/api/v2',
   fourmemeApiUrl: 'https://four.meme/meme-api',
@@ -76,34 +70,34 @@ const DEFAULT_CONFIG: CliConfig = {
 // Paths (lazy — respect HOME env var changes)
 // ============================================================
 
-/** Root directory for ALMM state */
-export function almmDir(): string {
-  return path.join(os.homedir(), '.almm')
+/** Root directory for fourMM state */
+export function fourmDir(): string {
+  return path.join(os.homedir(), '.fourmm')
 }
 
 /** Config file location */
 export function configFile(): string {
-  return path.join(almmDir(), 'config.json')
+  return path.join(fourmDir(), 'config.json')
 }
 
 /** Encrypted wallet groups store directory */
 export function walletsDir(): string {
-  return path.join(almmDir(), 'wallets')
+  return path.join(fourmDir(), 'wallets')
 }
 
 /** DataStore root (token info, holdings, balances, transactions) */
 export function dataDir(): string {
-  return path.join(almmDir(), 'data')
+  return path.join(fourmDir(), 'data')
 }
 
 /** Logs directory */
 export function logsDir(): string {
-  return path.join(almmDir(), 'logs')
+  return path.join(fourmDir(), 'logs')
 }
 
-/** Ensure ~/.almm and subdirs exist with tight permissions */
-export function ensureAlmmDirs(): void {
-  for (const dir of [almmDir(), walletsDir(), dataDir(), logsDir()]) {
+/** Ensure ~/.fourmm and subdirs exist with tight permissions */
+export function ensureFourmmDirs(): void {
+  for (const dir of [fourmDir(), walletsDir(), dataDir(), logsDir()]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     }
@@ -128,9 +122,9 @@ function applyEnvOverrides(config: CliConfig): CliConfig {
   }
 }
 
-/** Load config from ~/.almm/config.json (or defaults if absent) */
+/** Load config from ~/.fourmm/config.json (or defaults if absent) */
 export function loadConfig(): CliConfig {
-  ensureAlmmDirs()
+  ensureFourmmDirs()
 
   const file = configFile()
   if (!fs.existsSync(file)) {
@@ -149,7 +143,7 @@ export function loadConfig(): CliConfig {
 
 /** Save config to disk */
 export function saveConfig(config: CliConfig): void {
-  ensureAlmmDirs()
+  ensureFourmmDirs()
   fs.writeFileSync(configFile(), JSON.stringify(config, null, 2), {
     encoding: 'utf-8',
     mode: 0o600,
@@ -158,7 +152,7 @@ export function saveConfig(config: CliConfig): void {
 
 /** Initialize config (write defaults + any overrides) */
 export function initConfig(overrides: Partial<CliConfig> = {}): CliConfig {
-  ensureAlmmDirs()
+  ensureFourmmDirs()
   const config: CliConfig = { ...DEFAULT_CONFIG, ...overrides }
   saveConfig(config)
   return config
@@ -176,7 +170,6 @@ const VALID_KEYS = new Set<keyof CliConfig>([
   'gasPriceMultiplier',
   'defaultPriorityFeeGwei',
   'outputFormat',
-  'treasuryWallet',
   'bscscanApiKey',
   'geckoTerminalUrl',
   'fourmemeApiUrl',

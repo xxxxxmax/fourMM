@@ -1,7 +1,7 @@
 /**
  * DataStore type definitions.
  *
- * File formats for ~/.almm/data/. Each type corresponds to a JSON file on
+ * File formats for ~/.fourmm/data/. Each type corresponds to a JSON file on
  * disk. All timestamps are Unix milliseconds unless otherwise noted.
  */
 
@@ -60,7 +60,13 @@ export type PoolInfoFile = {
 // tokens/<CA>/groups/<groupId>/transactions.json
 // ============================================================
 
-export type TxType = 'buy' | 'sell' | 'transfer_in' | 'transfer_out' | 'turnover'
+export type TxType =
+  | 'buy'
+  | 'sell'
+  | 'transfer_in'
+  | 'transfer_out'
+  | 'turnover'
+  | 'volume'
 
 export type TransactionRecord = {
   txHash: Hash

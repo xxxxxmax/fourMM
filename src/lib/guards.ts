@@ -3,7 +3,7 @@
  *
  * The core invariant: every command that touches trading logic for a specific
  * token MUST call `assertSupportedToken(ca)` before doing any signing or
- * on-chain write. This is how ALMM enforces "TaxToken and X Mode are out of
+ * on-chain write. This is how fourMM enforces "TaxToken and X Mode are out of
  * scope" without having to repeat the check inside each command body.
  *
  * Failure mode: `assertSupportedToken` throws `UnsupportedTokenError`, which
@@ -15,7 +15,7 @@ import type { Address } from 'viem'
 import { identifyToken, type IdentifyResult } from './identify.js'
 import type { TokenVariant } from '../datastore/types.js'
 
-/** The two variants that ALMM actively supports */
+/** The two variants that fourMM actively supports */
 export type SupportedVariant = Extract<TokenVariant, 'standard' | 'anti-sniper-fee'>
 
 export class UnsupportedTokenError extends Error {
@@ -42,7 +42,7 @@ export class TokenNotFoundError extends Error {
 }
 
 /**
- * Throw if the token is a variant ALMM does not support OR the API says the
+ * Throw if the token is a variant fourMM does not support OR the API says the
  * token isn't on Four.meme at all.
  *
  * Returns the identification result so callers can avoid a second API call
@@ -66,7 +66,7 @@ export async function assertSupportedToken(
     throw new UnsupportedTokenError(
       result.variant,
       ca,
-      'TaxToken is not supported. ALMM refuses to market-make on TaxTokens — ' +
+      'TaxToken is not supported. fourMM refuses to market-make on TaxTokens — ' +
         'each round-trip costs 2× the fee rate (e.g. 10% on a 5% tax token). ' +
         'This is by design.',
     )
@@ -76,7 +76,7 @@ export async function assertSupportedToken(
     throw new UnsupportedTokenError(
       result.variant,
       ca,
-      'X Mode token is not supported. ALMM does not implement the exclusive ' +
+      'X Mode token is not supported. fourMM does not implement the exclusive ' +
         'Binance MPC Wallet purchase path (buyToken(bytes args, uint256 time, bytes signature)).',
     )
   }

@@ -1,7 +1,7 @@
 /**
  * In-house wallet group store.
  *
- * Storage: ~/.almm/wallets/wallet-store.json (mode 0600), JSON-encoded.
+ * Storage: ~/.fourmm/wallets/wallet-store.json (mode 0600), JSON-encoded.
  * Each wallet's privateKey is AES-encrypted with the master password.
  *
  * File shape:
@@ -24,7 +24,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { walletsDir, ensureAlmmDirs } from '../../lib/config.js'
+import { walletsDir, ensureFourmmDirs } from '../../lib/config.js'
 import type { Address, Hex } from 'viem'
 import {
   decrypt,
@@ -157,7 +157,7 @@ export function loadStore(password: string): WalletStoreFile | null {
 export function initStore(password: string): WalletStoreFile {
   if (!password) throw new Error('initStore: password is empty')
 
-  ensureAlmmDirs()
+  ensureFourmmDirs()
   const file = storePath()
   if (fs.existsSync(file)) {
     throw new Error(
@@ -265,7 +265,7 @@ export function addGeneratedWallets(
   const store = loadStore(password)
   if (!store) {
     throw new Error(
-      `No wallet store found. Create a group first with \`almm wallet create-group\`.`,
+      `No wallet store found. Create a group first with \`fourmm wallet create-group\`.`,
     )
   }
   const group = store.groups[groupId]
@@ -294,7 +294,7 @@ export function addWalletFromPrivateKey(
   const store = loadStore(password)
   if (!store) {
     throw new Error(
-      `No wallet store found. Create a group first with \`almm wallet create-group\`.`,
+      `No wallet store found. Create a group first with \`fourmm wallet create-group\`.`,
     )
   }
   const group = store.groups[groupId]

@@ -7,7 +7,7 @@ import {ITokenManagerHelper3} from "./interfaces/ITokenManagerHelper3.sol";
 import {IPancakeRouter02} from "./interfaces/IPancakeRouter02.sol";
 
 /// @title FourmemeMmRouter v2 — Atomic market-making router for Four.meme on BSC
-/// @author ALMM (Autonomous Liquidity Market Maker)
+/// @author fourMM (Four.meme Market Maker)
 /// @notice Stateless pass-through that bundles buy + sell into a single atomic
 ///         transaction. No admin, no fees. Single bool for reentrancy guard.
 ///
@@ -169,7 +169,7 @@ contract FourmemeMmRouter {
         uint256 bnbBefore = address(this).balance;
         // Note: swapExactTokensForETHSupportingFeeOnTransferTokens does NOT
         // return amounts (void), so we measure bnbBack via balance delta.
-        IPancakeRouter02(address(PANCAKE_ROUTER)).swapExactTokensForETH(
+        IPancakeRouter02(address(PANCAKE_ROUTER)).swapExactTokensForETHSupportingFeeOnTransferTokens(
             tokenBought,
             minBnbBack,
             sellPath,

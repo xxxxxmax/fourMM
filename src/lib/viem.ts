@@ -1,8 +1,8 @@
 /**
- * viem client factory for ALMM.
+ * viem client factory for fourMM.
  *
  * Builds a public client from the current config — respects rpcUrl and
- * fallbackRpcUrls from ~/.almm/config.json.
+ * fallbackRpcUrls from ~/.fourmm/config.json.
  */
 
 import { createPublicClient, fallback, http, type PublicClient } from 'viem'
@@ -40,11 +40,11 @@ export function getPublicClient(
   const chain = CHAINS[net]
   const transports = [config.rpcUrl, ...config.fallbackRpcUrls]
     .filter((url): url is string => Boolean(url))
-    .map((url) => http(url, { timeout: 15_000, retryCount: 2 }))
+    .map((url) => http(url, { timeout: 8_000, retryCount: 2 }))
 
   const client = createPublicClient({
     chain,
-    transport: fallback(transports, { rank: false }),
+    transport: fallback(transports, { rank: true }),
   })
   clientCache.set(key, client)
   return client
