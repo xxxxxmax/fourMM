@@ -11,17 +11,31 @@ Market-making CLI for [Four.meme](https://four.meme) on BNB Smart Chain.
 
 ## Setup
 
+### From npm (recommended)
+
 ```sh
-# Clone & build
+npm install -g fourmm
+fourmm config init
+```
+
+Or run without installing:
+
+```sh
+npx fourmm config init
+npx fourmm skills add
+npx fourmm --mcp
+```
+
+### From source
+
+```sh
 git clone <repo-url> && cd fourMM
 pnpm install && pnpm build
+```
 
-# Install skills for your agent
-npx fourmm skills add
+## Quick Start
 
-# Or start as MCP server
-npx fourmm --mcp
-
+```sh
 # Initialize config (BlockRazor MEV-protected RPC)
 fourmm config init
 
@@ -30,6 +44,12 @@ fourmm wallet create-group --name main --count 5
 
 # Fund wallets
 fourmm transfer out --from <your-funded-wallet> --to-group 1 --value 0.01
+
+# Install skills for your agent
+fourmm skills add
+
+# Or start as MCP server
+fourmm --mcp
 ```
 
 **Environment:** Set `FOURMM_PASSWORD` to avoid `--password` on every command.

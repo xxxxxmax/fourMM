@@ -16,6 +16,21 @@ fourMM is a command-line tool for running market-making strategies on [Four.meme
 
 ## Install
 
+### From npm (recommended)
+
+```bash
+npm install -g fourmm
+fourmm config init
+```
+
+Or run without installing:
+
+```bash
+npx fourmm config init
+```
+
+### From source
+
 ```bash
 pnpm install
 pnpm build
